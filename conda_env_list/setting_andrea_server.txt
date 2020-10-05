@@ -1,0 +1,49 @@
+pip3 install datajoint==0.11.1  #for installation of datajoint this version is only compatible to andreas pipeline.
+
+pip3 install -e .... #install pipeline package
+
+pip3 install git+https://github.com/atlab/scanreader.git  #install scanreader for scanimage loading
+
+git clone https://github.com/atlab/commons
+pip3 install -e ..   #install commons packages, you need also previllage for commons tables from andreas database
+
+
+# install tensorflow
+conda install tensorflow-gpu=1.13.1
+
+
+
+#install deeplabcut
+pip3 install git+https://github.com/cajal/DeepLabCut.git
+## 
+
+
+# install gitpython for loading pupil module
+pip3 install gitpython
+
+
+# Install pytorch
+pip3 install http://download.pytorch.org/whl/cu92/torch-0.4.1-cp36-cp36m-linux_x86_64.whl && \
+    pip3 install torchvision
+
+the above link does not work in my machine
+I replaced it with the following command
+
+conda install pytorch torchvision  -c pytorch
+
+
+
+
+# installation order is matter.
+## deeplabcut has always issued if I install pytorch, spyder, jupyter notebook
+# therefore, I reinstall deeplabcut again after installing one of these.
+# since deeplabcut use an old version of scipy 1.23xx
+
+
+# to install caiman
+apt-get install -y git python3-tk
+pip3 install future cvxpy scikit-learn scikit-image==0.14.3
+pip3 peakutils ipyparallel Cython h5py tqdm psutil
+
+pip3 install git+https://github.com/ecobost/CaImAn.git
+
