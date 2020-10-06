@@ -7,10 +7,16 @@ Created on Sat Sep 26 11:36:38 2020
 """
 
 #
-#import datajoint as dj
+#%run access_db.py
+runfile('access_db.py')
+
+import datajoint as dj
 import numpy as np
 import pandas as pd
-
+import matplotlib.pyplot as plt
+from pipeline import experiment, reso, meso, fuse, stack,  treadmill, pupil, shared
+from stimulus import stimulus
+anatomy = dj.create_virtual_module('anatomy', 'pipeline_anatomy')  
 
 #experiment = dj.create_virtual_module('experiment', 'pipeline_experiment')
 #meso = dj.create_virtual_module('meso', 'pipeline_meso')
@@ -19,14 +25,10 @@ import pandas as pd
 #treadmill = dj.create_virtual_module('treadmill', 'pipeline_treadmill')
 # shared = dj.create_virtual_module('shared', 'pipeline_shared')
 
-#%run access_db.py
-runfile('access_db.py')
+
 
 # schema = dj.schema('sang_neuro', locals(), create_tables=True)
 schema = dj.schema('sang_neuro')
-
-
-
 
 @schema
 class Sponscan(dj.Computed):
@@ -124,18 +126,84 @@ class SponScanSel(dj.Computed):
             key1['spon_frame_dur'] = spon_frame_dur
             self.insert1(key1)
             
+# *animal_id    *session    *scan_idx    *pipe_version  *segmentation_ *unit_id    brain_area             
+@schema            
+class AreaMembership(dj.Computed):
+    definition = """ # this is a replicate of anatomy.AreaMembership to populate mylist
+    -> meso.ScanInfo
+    -> shared.SegmentationMethod
+    ---    
+    caclulation_time=CURRENT_TIMESTAMP    : timestamp     # automatic    
+    """
+    @property
+    def key_source(self):
+        return (meso.ScanInfo*shared.SegmentationMethod) & anatomy.AreaMask & {'pipe_version':1, 'segmentation_method':6} 
+        #return key1 #& {'animal_id': 17797, 'session': 6, 'scan_idx': 4}
+    
+    class Unit(dj.Part):
+        definition = """ 
+        -> master      
+        unit_id                               : int          # unit id
+        ---
+        -> anatomy.Area        
+        """
+#    key  = {'animal_id': 17797, 'session': 6, 'scan_idx': 4, 'pipe_version': 1, 'segmentation_method': 6}
+    def make(self, key):
+        
+        print(key)
+        
+        fields = (meso.ScanInfo.Field & anatomy.AreaMask & key).fetch('field')
+        #field_keys = (meso.ScanSet & key).fetch('KEY')
+        
+        
+        self.insert1(key)
+        for field_id in fields:
+            field_key = key.copy()
+            field_key['field'] = field_id
+            area_masks, areas =(anatomy.AreaMask & field_key).fetch('mask','brain_area')
             
-# SponScanSel.populate()            
-key = (meso.ScanDone&SponScanSel&anatomy.AreaMembership).fetch('KEY')[0] 
+            area_mask = np.nan*np.ones(area_masks[0].shape)
+            for iarea in range(len(area_masks)):
+                area_mask[area_masks[iarea]>0] = iarea
+            
+            
+            #units selected from a specific field
+            unit_ids, px_x, px_y = (meso.ScanSet.UnitInfo & 
+                                    (meso.ScanSet.Unit& field_key)).fetch('unit_id','px_x','px_y')
+                       
+            dj.conn()
+            for i, uid in enumerate(unit_ids):                
+                area_idx = (area_mask[round(px_y[i]),round(px_x[i])])
+                tup_out = key.copy()            
+                tup_out['unit_id'] = uid                
+                if np.isnan(area_idx):
+                    tup_out['brain_area']= 'unknown'                    
+                else:                    
+                    tup_out['brain_area']= areas[int(area_idx)]                
+                AreaMembership.Unit.insert1(tup_out)
+            
+            
+popout = AreaMembership.populate(reserve_jobs=True,display_progress=True,
+                                 suppress_errors=True,
+                                 return_exception_objects=True,
+                                 order="random")           
+            
 
-
-key1 =  {'animal_id': 17358, 'session': 1, 'scan_idx': 13, 'pipe_version': 1, 'field': 1}
-key1 =  {'animal_id': 17358, 'session': 1, 'scan_idx': 13, 'pipe_version': 1, 'segmentation_method': 6}
-
-experiment.Scan * experiment.Session & key1
-field_key = ((fuse.ScanSet& anatomy.AreaMask) & key1).fetch('KEY')[0]
-area_masks, areas = (anatomy.AreaMask & field_key).fetch('mask','brain_area')
-
-
-
-meso.ScanSet.UnitInfo &field_key
+                
+            
+            
+            
+## SponScanSel.populate()            
+#key = (meso.ScanDone&SponScanSel&anatomy.AreaMembership).fetch('KEY')[0] 
+#
+#
+#key1 =  {'animal_id': 17358, 'session': 1, 'scan_idx': 13, 'pipe_version': 1, 'field': 1}
+#key1 =  {'animal_id': 17358, 'session': 1, 'scan_idx': 13, 'pipe_version': 1, 'segmentation_method': 6}
+#
+#experiment.Scan * experiment.Session & key1
+#field_key = ((fuse.ScanSet& anatomy.AreaMask) & key1).fetch('KEY')[0]
+#area_masks, areas = (anatomy.AreaMask & field_key).fetch('mask','brain_area')
+#
+#
+#
+#meso.ScanSet.UnitInfo &field_key
