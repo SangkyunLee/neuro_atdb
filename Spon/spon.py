@@ -7,8 +7,8 @@ Created on Sat Sep 26 11:36:38 2020
 """
 
 #
-#%run access_db.py
-runfile('access_db.py')
+%run access_db.py
+#runfile('access_db.py')
 
 import datajoint as dj
 import numpy as np
@@ -152,7 +152,7 @@ class AreaMembership(dj.Computed):
         
         print(key)
         
-        fields = (meso.ScanInfo.Field & anatomy.AreaMask & key).fetch('field')
+        fields = (meso.ScanInfo.Field & anatomy.AreaMask &(meso.ScanDone& key)).fetch('field')
         #field_keys = (meso.ScanSet & key).fetch('KEY')
         
         
@@ -189,10 +189,13 @@ popout = AreaMembership.populate(reserve_jobs=True,display_progress=True,
                                  order="random")           
             
 
+#key = {'animal_id': 17358, 'session': 1, 'scan_idx': 13,'segmentation_method':6,'spike_method':5}
                 
-            
-            
-            
+
+
+#aunit_id, brain_area = (AreaMembership.Unit & key).fetch('unit_id','brain_area')
+#funit_id, trace = (meso.Activity.Trace&key).fetch('unit_id','trace')
+
 ## SponScanSel.populate()            
 #key = (meso.ScanDone&SponScanSel&anatomy.AreaMembership).fetch('KEY')[0] 
 #
