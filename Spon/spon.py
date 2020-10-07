@@ -137,7 +137,7 @@ class AreaMembership(dj.Computed):
     """
     @property
     def key_source(self):
-        return (meso.ScanInfo*shared.SegmentationMethod) & anatomy.AreaMask & {'pipe_version':1, 'segmentation_method':6} 
+        return (meso.ScanInfo*shared.SegmentationMethod) & anatomy.AreaMask & meso.ScanDone& {'pipe_version':1, 'segmentation_method':6} 
         #return key1 #& {'animal_id': 17797, 'session': 6, 'scan_idx': 4}
     
     class Unit(dj.Part):
@@ -147,16 +147,15 @@ class AreaMembership(dj.Computed):
         ---
         -> anatomy.Area        
         """
-#    key  = {'animal_id': 17797, 'session': 6, 'scan_idx': 4, 'pipe_version': 1, 'segmentation_method': 6}
+
     def make(self, key):
-        
-        print(key)
-        
         fields = (meso.ScanInfo.Field & anatomy.AreaMask &(meso.ScanDone& key)).fetch('field')
-        #field_keys = (meso.ScanSet & key).fetch('KEY')
         
-        
-        self.insert1(key)
+        #print(key)
+        #print(len(fields))
+        if len(fields)>0:                   
+            self.insert1(key)
+            
         for field_id in fields:
             field_key = key.copy()
             field_key['field'] = field_id
@@ -187,10 +186,8 @@ popout = AreaMembership.populate(reserve_jobs=True,display_progress=True,
                                  suppress_errors=True,
                                  return_exception_objects=True,
                                  order="random")           
-            
 
-#key = {'animal_id': 17358, 'session': 1, 'scan_idx': 13,'segmentation_method':6,'spike_method':5}
-                
+          
 
 
 #aunit_id, brain_area = (AreaMembership.Unit & key).fetch('unit_id','brain_area')
