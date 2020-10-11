@@ -188,7 +188,6 @@ class AreaMembership(dj.Computed):
 #                                 order="random")           
 
           
-
 def exclude_border_neighbor(unit_loc_pix, border_loc_pix, field_shape, microns_per_pixel=(1,1),
                            px_dist_edge=10, dist_border=30):
     """
@@ -197,6 +196,7 @@ def exclude_border_neighbor(unit_loc_pix, border_loc_pix, field_shape, microns_p
     arguments:
     unit_loc_pix : tuple of lists of y and x in pixel location of units
     border_loc_pix : tuple of lists of y and x in pixel location of area border
+                    if no border is given within a field,  ([],[])
     field_shape : tupe of y- and x- size
     px_dist_edge : pixel distance to field edge
     dist_border : distance(um) threshold to area border 
@@ -216,18 +216,19 @@ def exclude_border_neighbor(unit_loc_pix, border_loc_pix, field_shape, microns_p
     mask[:,slice(px_dist_edge)]=False
     mask[:,slice(field_shape[1]-px_dist_edge, field_shape[1])]=False
     #return mask
+    if len(border_loc_pix[0])>0:
 
-
-    df_y=  px_y[:,np.newaxis] -  border_loc_pix[0]
-    df_x=  px_x[:,np.newaxis] -  border_loc_pix[1]
-    
-    
-    dist = np.sqrt((df_y*microns_per_pixel[0])**2+(df_x*microns_per_pixel[1])**2)
-    # minium distance to any area border
-    mindist = np.min(dist,axis=1)
-    cidx  = np.where(np.logical_and(mindist>dist_border, mask[px_y, px_x]))
-    
-    cmask = np.zeros(field_shape)
+        df_y=  px_y[:,np.newaxis] -  border_loc_pix[0]
+        df_x=  px_x[:,np.newaxis] -  border_loc_pix[1]    
+        
+        dist = np.sqrt((df_y*microns_per_pixel[0])**2+(df_x*microns_per_pixel[1])**2)
+        # minium distance to any area border
+        mindist = np.min(dist,axis=1)
+        cidx  = np.where(np.logical_and(mindist>dist_border, mask[px_y, px_x]))
+    else: # when bodrder_loc_pix is empty
+        cidx  = np.where(mask[px_y, px_x])
+        
+    cmask = np.zeros(field_shape)    
     cmask[border_loc_pix[0],border_loc_pix[1]] = 1    
     cmask[px_y[cidx[0]], px_x[cidx[0]] ]=2
     
@@ -343,25 +344,25 @@ class BorderRestrict(dj.Computed):
                 
                 # create area mask
                 area_masks, areas =(anatomy.AreaMask & field_key).fetch('mask','brain_area')
-                if len(areas)>1:
-                    area_mask = np.zeros(area_masks[0].shape)
-                    for iarea in range(len(area_masks)):
-                        area_mask[area_masks[iarea]>0] = iarea+1
+                area_mask = np.zeros(area_masks[0].shape)
+                
+                for iarea in range(len(area_masks)):                    
+                    area_mask[area_masks[iarea]>0] = iarea+1
                     
-                   
-                    
-                    import cv2
-                    edge_image = cv2.Laplacian(area_mask,cv2.CV_64F)
-                    border_loc_pix  = np.where(abs(edge_image)>0)   
-                    
-                    microns_per_pixel = (meso.ScanInfo.Field& field_key).microns_per_pixel            
-                    uix, mask_img = exclude_border_neighbor((px_y,px_x), border_loc_pix, 
-                                                           area_mask.shape, 
-                                                           microns_per_pixel,
-                                                           field_key['edge_distance_px'], 
-                                                           field_key['border_distance_um'])
-                else:
-                    uix = slice(len(unit_ids))
+                import cv2
+                edge_image = cv2.Laplacian(area_mask,cv2.CV_64F)
+                border_loc_pix  = np.where(abs(edge_image)>0) 
+                
+                if len(border_loc_pix)<2 or len(border_loc_pix[0])==0: # when single area is imaged
+                    border_loc_pix = ([],[])                       
+                
+                microns_per_pixel = (meso.ScanInfo.Field& field_key).microns_per_pixel            
+                uix, mask_img = exclude_border_neighbor((px_y,px_x), border_loc_pix, 
+                                                       area_mask.shape, 
+                                                       microns_per_pixel,
+                                                       field_key['edge_distance_px'], 
+                                                       field_key['border_distance_um'])
+               
                 
                 unit_ids_sel= unit_ids[uix]
                 
@@ -392,13 +393,11 @@ class BorderRestrict(dj.Computed):
                 print(unit_key)
                 
 popout = BorderRestrict.populate(order="random",display_progress=True,suppress_errors=True)
-
-popout = BorderRestrict.populate(reserve_jobs=True,display_progress=True,
-                                 suppress_errors=True,
-                                 return_exception_objects=True,
-                                 order="random")    
-
-
+#
+#popout = BorderRestrict.populate(reserve_jobs=True,display_progress=True,
+#                                 suppress_errors=True,
+#                                 return_exception_objects=True,
+#                                 order="random")    
 
 
 
@@ -406,18 +405,16 @@ popout = BorderRestrict.populate(reserve_jobs=True,display_progress=True,
 
 
 
+key = {'animal_id': 17795, 'session': 5, 'scan_idx': 5, 'pipe_version': 1, 'segmentation_method': 6}
 
 
 
+rel = meso.Activity.Trace&(BorderRestrict.Unit&key&'border_distance_um =100')
 
 
-
-
-
-
-
-
-
+# check number of unit in each brain area
+rel =meso.ScanSet.Unit* (AreaMembership.Unit&(BorderRestrict.Unit&key&'border_distance_um =100'))
+dj.U('field','brain_area').aggr(rel, n='count(brain_area)')
 
 
 #aunit_id, brain_area = (AreaMembership.Unit & key).fetch('unit_id','brain_area')
