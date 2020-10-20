@@ -392,33 +392,68 @@ class BorderRestrict(dj.Computed):
                     BorderRestrict.Unit.insert1(unit_key)
                 print(unit_key)
                 
-popout = BorderRestrict.populate(order="random",display_progress=True,suppress_errors=True)
+#popout = BorderRestrict.populate(order="random",display_progress=True,suppress_errors=True)
 #
-#popout = BorderRestrict.populate(reserve_jobs=True,display_progress=True,
-#                                 suppress_errors=True,
-#                                 return_exception_objects=True,
-#                                 order="random")    
+
+@schema            
+class LayerMembership(dj.Computed):
+    definition = """ # this is a replicate of anatomy.AreaMembership to populate mylist
+    -> meso.ScanInfo
+    -> shared.SegmentationMethod
+    ---    
+    caclulation_time=CURRENT_TIMESTAMP    : timestamp     # automatic    
+    """
+    
+    class Unit(dj.Part):
+        definition = """ 
+        -> master      
+        unit_id                               : int          # unit id
+        ---
+        -> anatomy.Layer        
+        """
+    @property
+    def key_source(self):
+        return (meso.ScanInfo*shared.SegmentationMethod) & meso.ScanDone& {'pipe_version':1, 'segmentation_method':6} 
+
+    def make(self, key):
+        field_keys = ((meso.ScanInfo.Field*shared.SegmentationMethod) &(meso.ScanDone& key)).fetch('KEY')
+        self.insert1(key)
+        
+        layers, zstart, zend = anatomy.Layer.fetch('layer','z_start','z_end')
+            
+        for field_key in field_keys:
+            depth = (meso.ScanInfo.Field &field_key).fetch('z')
+             
+            mask_keys = (meso.ScanSet.Unit&field_key).fetch('KEY')
+            
+            idx = np.all(np.vstack((zstart<depth[0], zend>=depth[0])),0)
+            if len(np.where(idx))==1:
+                layer = layers[idx][0]
+            else:
+                layer = 'unset'
+                
+            for i in range(len(mask_keys)):
+                mask_keys[i]['layer']=layer
+            dj.conn()
+            
+            LayerMembership.Unit.insert(mask_keys)
+
+popout = LayerMembership.populate(display_progress=True)
 
 
 
 
-
-
-
-key = {'animal_id': 17795, 'session': 5, 'scan_idx': 5, 'pipe_version': 1, 'segmentation_method': 6}
-
-
-
-rel = meso.Activity.Trace&(BorderRestrict.Unit&key&'border_distance_um =100')
-
-
-# check number of unit in each brain area
-rel =meso.ScanSet.Unit* (AreaMembership.Unit&(BorderRestrict.Unit&key&'border_distance_um =100'))
-dj.U('field','brain_area').aggr(rel, n='count(brain_area)')
-
-
-#aunit_id, brain_area = (AreaMembership.Unit & key).fetch('unit_id','brain_area')
-#funit_id, trace = (meso.Activity.Trace&key).fetch('unit_id','trace')
+#key = {'animal_id': 17795, 'session': 5, 'scan_idx': 5, 'pipe_version': 1, 'segmentation_method': 6}
+#rel = meso.Activity.Trace&(BorderRestrict.Unit&key&'border_distance_um =100')
+#
+#
+## check number of unit in each brain area
+#rel =meso.ScanSet.Unit* (AreaMembership.Unit&(BorderRestrict.Unit&key&'border_distance_um =100'))
+#dj.U('field','brain_area').aggr(rel, n='count(brain_area)')
+#
+#
+##aunit_id, brain_area = (AreaMembership.Unit & key).fetch('unit_id','brain_area')
+##funit_id, trace = (meso.Activity.Trace&key).fetch('unit_id','trace')
 
 ## SponScanSel.populate()            
 #key = (meso.ScanDone&SponScanSel&anatomy.AreaMembership).fetch('KEY')[0] 
