@@ -15,7 +15,9 @@ dj.config['database.host'] = os.environ.get('ATHOST')
 dj.config['database.user'] = os.environ.get('ATUSER')
 dj.config['database.password'] = os.environ.get('ATPW')
 
-
+dj.config['external-deeplab']= dict(
+              protocol='file',
+              location='/media/data/sang_data/.at-db_local')
          
 dj.conn()
  

@@ -438,9 +438,55 @@ class LayerMembership(dj.Computed):
             
             LayerMembership.Unit.insert(mask_keys)
 
-popout = LayerMembership.populate(display_progress=True)
+#popout = LayerMembership.populate(display_progress=True)
 
+@schema
+class SpontaneousActivity(dj.Computed):
+    definition = """
+    -> BorderRestrict
+    -> shared.SpikeMethod
+    -> anatomy.Area
+    -> anatomy.Layer
+    ---  
+    unit_number                      : int           # number of units
+    unit_ids                         : blob           # list of unit ids
+    mean_activity                    :  external-deeplab   # timesamples 
+    activity_matrix                  :  external-deeplab   # timesamples x number of units
+    spa_ctime = CURRENT_TIMESTAMP    : timestamp     # automatic    
+    """
+    @property
+    def key_source(self):
+        return BorderRestrict&LayerMembership.proj()&SponScanSel.proj()
+    
+    
+    def make(self, key):
+        units = (AreaMembership.Unit*LayerMembership.Unit)&BorderRestrict.Unit&key
+        a = (dj.U('brain_area','layer')&units).fetch()
+        brain_areas, layers = zip(*a)
+        n = len(a)
+        
+        for i in range(n):
+            ba = brain_areas[i]
+            layer = layers[i]            
+            outkey = key.copy()
+            
+            area_keys = units&{'brain_area':ba,'layer':layer}
+            outkey['brain_area'] = ba
+            outkey['layer'] = layer
+            outkey['unit_number'] = len(area_keys)
+            outkey['spike_method']=5
+            outkey['unit_ids'] = area_keys.fetch('unit_id')
+            Trace = (meso.Activity.Trace&area_keys & {'spike_method':5}).fetch('trace')
+            spon_start_idx = (Sponscan&key).fetch('spon_frame_start')[0]
+            m = np.vstack(Trace).T
+            m = m[spon_start_idx:,:] 
+            outkey['activity_matrix'] = m        
+            mactivity = np.mean(m,1)
+            outkey['mean_activity'] = mactivity    
+            dj.conn()
+            self.insert1(outkey)
 
+popout = SpontaneousActivity.populate(order="random",display_progress=True,suppress_errors=True)
 
 
 #key = {'animal_id': 17795, 'session': 5, 'scan_idx': 5, 'pipe_version': 1, 'segmentation_method': 6}
