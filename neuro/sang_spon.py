@@ -16,6 +16,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pipeline import experiment, reso, meso, fuse, stack,  treadmill, pupil, shared
 from stimulus import stimulus
+from sang_neuro import AreaMembership, BorderRestrict, LayerMembership
 anatomy = dj.create_virtual_module('anatomy', 'pipeline_anatomy')  
 
 
@@ -164,14 +165,99 @@ class SpontaneousActivity(dj.Computed):
 
 #popout = SpontaneousActivity.populate(order="random",display_progress=True,suppress_errors=True)
 
+from util.sigproc import NaNSpline, load_eye_traces, load_frame_times_vstim, load_frame_times_behav, load_treadmill_trace
+from util.sigproc import get_filter
+
+@schema
+class Behav4Spon(dj.Computed):
+    definition="""
+    # behav trace during spontaneous recording
+    
+    ->pupil.Eye
+    ->treadmill.Treadmill
+    downsample_dur        :  float      # duration for behavior down-sampling
+    ---
+    quantile_list         : external-deeplab        # quantile list during entire scan
+    pupil_stat            : external-deeplab        # activity level from quantile list
+    treadmill_stat        : external-deeplab        # activity level from quantile list
+    t                     : external-deeplab        # sampled timestamps in behavior clock
+    pupil_radius          : external-deeplab        # pupil radius
+    treadmil_absvel       : external-deeplab        # treadmil absolute velocity
+    """
+    @property
+    def key_source(self):
+        return dj.U('animal_id','session','scan_idx')&SpontaneousActivity
+    
+    def make(self, scankey):
+        v, treadmill_time = load_treadmill_trace(scankey)
+        #ftimes_vstim = load_frame_times_vstim(scankey) #2p-frame time on visual stimulus clock
+        ftimes_behav = load_frame_times_behav(scankey)  #2p-frame time on behavior clock
+        radius, xy, eye_time, tracking_method = load_eye_traces(scankey, shape='circle')
+        
+        
+        outkey = scankey.copy()
+        dur = 0.5 # filtering duration
+        outkey['downsample_dur'] = dur
+        
+        # filtering for treadmill velocity
+        treadmill_sp = np.nanmedian(np.diff(treadmill_time)) # sampling period
+        filter_shape = get_filter(dur, treadmill_sp)
+        smooth_v = np.convolve(v,filter_shape, mode='same')
+        
+        
+        # filtering for eye
+        eye_sp = np.nanmedian(np.diff(eye_time)) # sampling period
+        filter_shape = get_filter(dur, eye_sp)
+        smooth_pupil = np.convolve(radius,filter_shape, mode='same')
+        
+        # NaNSpline allows to sample velocity at arbitary timepoints 
+        # between min(treadmill_time) and max(treadmill_time) 
+        treadmill_spline = NaNSpline(treadmill_time, smooth_v,k=1, ext=0) 
+        pupil_spline = NaNSpline(eye_time, smooth_pupil, k=1, ext=0)
+        
+        
+        spon_start_idx = (Sponscan&scankey).fetch('spon_frame_start')[0]
+        spon_start_time = ftimes_behav[spon_start_idx]
+        spon_end_time = ftimes_behav[-1]
+        
+        # behavior trace for the entire scantime
+        t1 = np.arange(ftimes_behav[0], spon_end_time,dur)
+        pup1 = pupil_spline(t1)
+        tread_v1 = treadmill_spline(t1)
+        
+        a= np.vstack([pup1, tread_v1])
+        quantile_list = np.arange(0,1.05,0.1)
+        stat = np.nanquantile(np.abs(a),quantile_list,axis=1)
+        outkey['quantile_list'] = quantile_list
+        outkey['pupil_stat'] = stat[:,0]
+        outkey['treadmill_stat'] = stat[:,0]
+
+        t = np.arange(spon_start_time, spon_end_time,dur)
+        pup = pupil_spline(t)
+        tread_v = treadmill_spline(t)
+        outkey['t'] = t
+        outkey['pupil_radius'] = pup
+        outkey['treadmil_absvel'] = tread_v
+        dj.conn()
+        self.insert1(outkey)
+
+        
+popout = Behav4Spon.populate(order="random",display_progress=True,suppress_errors=True)        
+popout = Behav4Spon.populate(display_progress=True)      
 
 
 
 
-
-
-
-
-
-
+#t = np.arange(spon_start_time, spon_end_time,0.1)
+#pup = pupil_spline(t)
+#tread_v = treadmill_spline(t)
+#
+#plt.figure(figsize=(15,4))
+#plt.plot(t1,pup1)
+#plt.plot(t,pup)
+#plt.figure(figsize=(15,4))
+#plt.plot(t1, tread_v1)
+#plt.plot(t, tread_v)
+#
+#plt.hist(pup1,100)
 
