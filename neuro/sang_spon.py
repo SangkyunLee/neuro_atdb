@@ -152,8 +152,8 @@ class SpontaneousActivity(dj.Computed):
             outkey['layer'] = layer
             outkey['unit_number'] = len(area_keys)
             outkey['spike_method']=5
-            outkey['unit_ids'] = area_keys.fetch('unit_id')
-            Trace = (meso.Activity.Trace&area_keys & {'spike_method':5}).fetch('trace')
+            outkey['unit_ids'] = area_keys.fetch('unit_id', order_by='unit_id ASC')
+            Trace = (meso.Activity.Trace&area_keys & {'spike_method':5}).fetch('trace', order_by='unit_id ASC')
             spon_start_idx = (Sponscan&key).fetch('spon_frame_start')[0]
             m = np.vstack(Trace).T
             m = m[spon_start_idx:,:] 
@@ -169,13 +169,27 @@ from util.sigproc import NaNSpline, load_eye_traces, load_frame_times_vstim, loa
 from util.sigproc import get_filter
 
 @schema
+class DownSampleDur(dj.Lookup):
+    definition = """
+    # window size to smooth behavior trace
+    duration      :float   # downsampling duration
+    ---
+    
+    """
+    contents = [{'duration':0.25},
+                {'duration':0.5},
+                {'duration':1},
+                {'duration':2}
+                ]
+
+@schema
 class Behav4Spon(dj.Computed):
     definition="""
     # behav trace during spontaneous recording
     
     ->pupil.Eye
     ->treadmill.Treadmill
-    downsample_dur        :  float      # duration for behavior down-sampling
+    ->DownSampleDur    # duration for behavior down-sampling
     ---
     quantile_list         : external-deeplab        # quantile list during entire scan
     pupil_stat            : external-deeplab        # activity level from quantile list
@@ -186,7 +200,7 @@ class Behav4Spon(dj.Computed):
     """
     @property
     def key_source(self):
-        return dj.U('animal_id','session','scan_idx')&SpontaneousActivity
+        return (dj.U('animal_id','session','scan_idx')&SpontaneousActivity)*DownSampleDur
     
     def make(self, scankey):
         v, treadmill_time = load_treadmill_trace(scankey)
@@ -196,8 +210,8 @@ class Behav4Spon(dj.Computed):
         
         
         outkey = scankey.copy()
-        dur = 0.5 # filtering duration
-        outkey['downsample_dur'] = dur
+        dur = outkey['duration']  # filtering duration
+        
         
         # filtering for treadmill velocity
         treadmill_sp = np.nanmedian(np.diff(treadmill_time)) # sampling period
@@ -232,18 +246,28 @@ class Behav4Spon(dj.Computed):
         outkey['pupil_stat'] = stat[:,0]
         outkey['treadmill_stat'] = stat[:,0]
 
-        t = np.arange(spon_start_time, spon_end_time,dur)
+        t = np.arange(spon_start_time, spon_end_time,dur/2)
         pup = pupil_spline(t)
         tread_v = treadmill_spline(t)
         outkey['t'] = t
         outkey['pupil_radius'] = pup
-        outkey['treadmil_absvel'] = tread_v
+        outkey['treadmil_absvel'] = abs(tread_v)
         dj.conn()
         self.insert1(outkey)
 
         
-popout = Behav4Spon.populate(order="random",display_progress=True,suppress_errors=True)        
-popout = Behav4Spon.populate(display_progress=True)      
+#popout = Behav4Spon.populate(order="random",display_progress=True,suppress_errors=True)        
+#popout = Behav4Spon.populate(display_progress=True)      
+
+
+scankeys = dj.U('animal_id','session','scan_idx')&SpontaneousActivity
+scankeys_dict = scankeys.fetch('KEY')
+scankey = scankeys_dict[0]
+border_distance = 30
+ba, layer,  nunit, act = (SpontaneousActivity&scankey&{'border_distance_um':border_distance}).fetch(
+        'brain_area','layer','unit_number','mean_activity')
+
+
 
 
 
