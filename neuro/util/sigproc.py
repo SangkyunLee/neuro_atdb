@@ -72,6 +72,9 @@ def get_filter(dur_sec, sampling_timesec, type='hamming'):
         if type == 'hamming':
             h = np.hamming(2*M+1)
             h = h/np.sum(h)
+        elif type=='avg':
+            h = np.ones(M)
+            h = h/np.sum(h)
         else:
             raise NotImplementedError('Filter {}  not implemented'.format(filter))
     return h

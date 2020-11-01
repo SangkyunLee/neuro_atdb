@@ -7,7 +7,7 @@ Created on Sat Sep 26 11:36:38 2020
 """
 
 #
-%run access_db.py
+#%run access_db.py
 #runfile('access_db.py')
 
 import datajoint as dj
@@ -67,12 +67,7 @@ class Sponscan(dj.Computed):
                 
                 self.insert1(out_)
                 
-        
-# Sponscan.populate()        
 
-#animal_ids: 17797, 17977,18142, 18252
-
-    
 @schema
 class SponScanSel(dj.Computed):
     definition = """ # scan depth summary
@@ -176,7 +171,9 @@ class DownSampleDur(dj.Lookup):
     ---
     
     """
-    contents = [{'duration':0.25},
+    contents = [{'duration':0},
+                {'duration':0.125},
+                {'duration':0.25},
                 {'duration':0.5},
                 {'duration':1},
                 {'duration':2}
@@ -189,7 +186,7 @@ class Behav4Spon(dj.Computed):
     
     ->pupil.Eye
     ->treadmill.Treadmill
-    ->DownSampleDur    # duration for behavior down-sampling
+    ->DownSampleDur.proj(behav_down_dur = 'duration')    # duration for behavior down-sampling
     ---
     quantile_list         : external-deeplab        # quantile list during entire scan
     pupil_stat            : external-deeplab        # activity level from quantile list
@@ -200,7 +197,8 @@ class Behav4Spon(dj.Computed):
     """
     @property
     def key_source(self):
-        return (dj.U('animal_id','session','scan_idx')&SpontaneousActivity)*DownSampleDur
+        return (dj.U('animal_id','session','scan_idx')&SpontaneousActivity)*DownSampleDur.proj(
+                behav_down_dur='duration')&'behav_down_dur>0'
     
     def make(self, scankey):
         v, treadmill_time = load_treadmill_trace(scankey)
@@ -210,7 +208,7 @@ class Behav4Spon(dj.Computed):
         
         
         outkey = scankey.copy()
-        dur = outkey['duration']  # filtering duration
+        dur = outkey['behav_down_dur']  # filtering duration
         
         
         # filtering for treadmill velocity
@@ -235,7 +233,7 @@ class Behav4Spon(dj.Computed):
         spon_end_time = ftimes_behav[-1]
         
         # behavior trace for the entire scantime
-        t1 = np.arange(ftimes_behav[0], spon_end_time,dur)
+        t1 = np.arange(ftimes_behav[0], spon_end_time,dur/2)
         pup1 = pupil_spline(t1)
         tread_v1 = treadmill_spline(t1)
         
@@ -246,7 +244,7 @@ class Behav4Spon(dj.Computed):
         outkey['pupil_stat'] = stat[:,0]
         outkey['treadmill_stat'] = stat[:,0]
 
-        t = np.arange(spon_start_time, spon_end_time,dur/2)
+        t = ftimes_behav[spon_start_idx:]
         pup = pupil_spline(t)
         tread_v = treadmill_spline(t)
         outkey['t'] = t
@@ -258,30 +256,86 @@ class Behav4Spon(dj.Computed):
         
 #popout = Behav4Spon.populate(order="random",display_progress=True,suppress_errors=True)        
 #popout = Behav4Spon.populate(display_progress=True)      
+@schema
+class BehavMarker(dj.Lookup):
+    definition="""
+    # Behavior Marker
+    marker       :       char(20)   # behavior marker
+    ---
+    """
+    contents=[['pupilR'],       # pupil radius
+              ['Grad_pupilR'],  # Gradient of pupil radius
+              ['PGrad_pupilR'], # Positive Gradient of pupil radius
+              ['NGrad_pupilR'], # Negative Gradient of pupil radius
+              ['TreadV']]       # Velocity of Treadmill
+
+from functools import partial
+@schema
+class CorrBehav2Spon(dj.Computed):
+    definition ="""
+    ->BorderRestrict
+    ->Behav4Spon
+    ->DownSampleDur.proj(window_size = 'duration')
+    --- 
+    beh_markers      : external-deeplab     # behavior markers
+    brain_areas      : external-deeplab     # brain_area list
+    layers           : external-deeplab      # layer list    
+    nunit            : external-deeplab      # list of nunit
+    corr_mat         : external-deeplab      # correlation coefficent beh_markers x rois   
+    """
+    @property
+    def key_source(self):
+        return  (BorderRestrict*Behav4Spon)*DownSampleDur.proj(window_size='duration')&'window_size>=0.5 or window_size=0'
+
+    def make(self, key):
+        outkey = key.copy()
+        print(key)
+        
+        ba, layer, nunit, Pact = (SpontaneousActivity&key).fetch('brain_area','layer', 'unit_number','mean_activity')
+        Pact = np.vstack(Pact)
+        t, pR, tV =  (Behav4Spon&key).fetch('t','pupil_radius','treadmil_absvel')
+        pRd = np.gradient(pR[0],t[0])
+        pRdp =pRd.copy()
+        pRdn =pRd.copy()
+        pRdp[pRdp<0]=0
+        pRdn[pRdn>0]=0
+        pRdn = np.abs(pRdn)
+        
+        min_ = min(len(t[0]), Pact.shape[1])
+        X =np.vstack((Pact[:,:min_],pR[0][:min_],pRd[:min_], pRdp[:min_],
+                      pRdn[:min_], tV[0][:min_]))
+        list_beh_marker = ['pupilR','Grad_pupilR','PGrad_pupilR','NGrad_pupilR','TreadV']
+        outkey['beh_markers']= ", ".join(list_beh_marker)
+        
+        
+        windowsize = key['window_size']
+        if windowsize > 0:
+            sampling_period = np.nanmedian(np.diff(t[0]))
+            h = get_filter(windowsize,sampling_period,'avg')
+            fun = partial(np.convolve,v=h, mode='same')
+            X_ = list(map(fun,X))
+            X = np.vstack(X_)
+            X = X[:,::len(h)]
+        
+        idx  = ~np.isnan(X)
+        idx = np.all(idx, axis=0)
+        corr = np.corrcoef(X[:,idx])
+        nroi = len(ba)
+        corr_ = corr[nroi:,:nroi]
+        
+        
+        outkey['brain_areas'] = ", ".join(ba)
+        outkey['layers'] = ", ".join(layer)
+        outkey['nunit'] = nunit
+        outkey['corr_mat']=corr_
+        dj.conn()
+        
+        self.insert1(outkey)
 
 
-scankeys = dj.U('animal_id','session','scan_idx')&SpontaneousActivity
-scankeys_dict = scankeys.fetch('KEY')
-scankey = scankeys_dict[0]
-border_distance = 30
-ba, layer,  nunit, act = (SpontaneousActivity&scankey&{'border_distance_um':border_distance}).fetch(
-        'brain_area','layer','unit_number','mean_activity')
+popout = CorrBehav2Spon.populate(display_progress=True)
 
-
-
-
-
-
-#t = np.arange(spon_start_time, spon_end_time,0.1)
-#pup = pupil_spline(t)
-#tread_v = treadmill_spline(t)
+#popout = CorrBehav2Spon.populate(order="random",display_progress=True,suppress_errors=True)
 #
-#plt.figure(figsize=(15,4))
-#plt.plot(t1,pup1)
-#plt.plot(t,pup)
-#plt.figure(figsize=(15,4))
-#plt.plot(t1, tread_v1)
-#plt.plot(t, tread_v)
-#
-#plt.hist(pup1,100)
+
 

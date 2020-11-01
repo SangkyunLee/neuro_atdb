@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Oct 30 11:15:58 2020
+
+@author: admin
+"""
+
+# To see table relationship 
+SELECT 
+  `TABLE_SCHEMA`,                          -- Foreign key schema
+  `TABLE_NAME`,                            -- Foreign key table
+  `COLUMN_NAME`,                           -- Foreign key column
+  `REFERENCED_TABLE_SCHEMA`,               -- Origin key schema
+  `REFERENCED_TABLE_NAME`,                 -- Origin key table
+  `REFERENCED_COLUMN_NAME`                 -- Origin key column
+FROM
+  `INFORMATION_SCHEMA`.`KEY_COLUMN_USAGE`  -- Will fail if user don't have privilege
+WHERE
+  `TABLE_SCHEMA` = SCHEMA()                -- Detect current schema in USE 
+  AND `REFERENCED_TABLE_NAME` IS NOT NULL; -- Only tables with foreign keys
