@@ -7,7 +7,7 @@ Created on Sat Sep 26 11:36:38 2020
 """
 
 #
-#%run access_db.py
+%run access_db.py
 #runfile('access_db.py')
 
 import datajoint as dj
@@ -16,7 +16,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pipeline import experiment, reso, meso, fuse, stack,  treadmill, pupil, shared
 from stimulus import stimulus
-from sang_neuro import AreaMembership, BorderRestrict, LayerMembership
+from sang_neuro import AreaMembership, BorderRestrict, LayerMembership, BorderDistance
 anatomy = dj.create_virtual_module('anatomy', 'pipeline_anatomy')  
 
 
@@ -331,11 +331,118 @@ class CorrBehav2Spon(dj.Computed):
         dj.conn()
         
         self.insert1(outkey)
+        
+    @staticmethod
+    def collect_corr(behav_down_dur, window_size,  marker_list=[],border_distance_um=50):
+        """
+        plot correlation coef between population activity and beh_marker
+        e.g. 
+        behav_down_dur=0.5
+        window_size = 2
+        marker_list=['pupilR','TreadV']
+        """
+        
+#        marker_list=['Grad_pupilR','PGrad_pupilR','NGrad_pupilR']
+        
+        
+        criterion = {'behav_down_dur':behav_down_dur,\
+                     'window_size':window_size,\
+                     'border_distance_um': border_distance_um,\
+                     'edge_distance_px': 10}
+        if len(marker_list)==0:
+            marker_list = BehavMarker.fetch('marker')
+        
+        
+        aid, sess, sidx, ma, ba, l, corrmat = (CorrBehav2Spon&criterion).fetch(
+                'animal_id','session','scan_idx','beh_markers','brain_areas','layers','corr_mat')   
+        scan_info = pd.DataFrame({'aid':aid,'ses':sess,'scan':sidx})
+        scan_list = scan_info.groupby(['aid','ses']).indices
+        
+     
+        
+        col = []
+        for x,y in zip(ba,l):
+            x=(x[0].split(', '))
+            y=(y[0].split(', '))
+            col.extend(list(zip(x,y)))
+        col = list(set(col))        
+        nrw = len(marker_list)        
+        R = np.full((nrw,len(col), len(scan_list)), fill_value = np.nan) # average across scans with a session
+        R1 = np.full((nrw,len(col), len(corrmat)), fill_value = np.nan) # not average across scans
+        
+        search1 = lambda A,x: [k for k,a in enumerate(A) if a==x ]
+        
+        def search_col(x):
+            out = search1(col, x)
+            assert len(out)==1, 'col should be a set'
+            return out[0]
+        
+        
+        for i, p in enumerate((scan_list.keys())):
+            scanidx = scan_list[p]
+            corr_ = corrmat[scanidx]      
+            #print(scanidx)
+            
+            R_ = np.full((nrw,len(col), len(scanidx)), fill_value = np.nan)
+            for j, scani in enumerate(scanidx):
+                corr_ = corrmat[scani]
+                bal = list(zip(ba[scani][0].split(', '),l[scani][0].split(', ')))
+                col_idx = list(map(search_col,bal))
+                #print(col_idx) #print(np.array(col)[col_idx])
+                ma_ = ma[scani][0].split(', ')
+                
+                def search_marker_list(x):
+                    out = search1(ma_, x)
+                    assert len(out)==1, 'ma_ should be a set'
+                    return out[0]
+                ma_idx = list(map(search_marker_list, marker_list)) 
+                R_[:,col_idx,j] = corr_[ma_idx]
+            R[:,:,i] = np.nanmean(R_, axis=2)
+            R1[:,:,scanidx] = R_
+            
+            
+        return R, R1, col, marker_list
 
-
-popout = CorrBehav2Spon.populate(display_progress=True)
-
+    @staticmethod                        
+    def plot_corr(R, col, row, thr_n=5):    
+        xtick_str =np.array([a[:2]+'\n'+b for a, b in col])
+        mR = np.nanmean(R, axis=2)
+        nR = np.sum(abs(R)>0,axis=2)
+        eR = np.nanstd(R, axis=2)/np.sqrt(nR)
+        mR[nR<thr_n]=0
+        eR[nR<thr_n]=0
+        
+        
+        
+        xaxis = np.arange(len(xtick_str))
+        hfig = plt.figure(figsize=(10,5*len(row)))
+        for i in range(len(marker_list)):            
+            plt.subplot(len(row),1,i+1)
+            cid = np.argsort(mR[i])[::-1]                    
+            plt.errorbar(xaxis, mR[i,cid],eR[i,cid])
+            plt.title(row[i])
+            plt.xticks(xaxis,xtick_str[cid])
+            plt.plot(xaxis, np.zeros(xaxis.shape),color='k', linestyle ='--', linewidth=1)
+            
+#popout = CorrBehav2Spon.populate(display_progress=True)
 #popout = CorrBehav2Spon.populate(order="random",display_progress=True,suppress_errors=True)
+     
+behav_down_dur=0.5
+window_size = 0.5
+marker_list=['pupilR','Grad_pupilR','TreadV']            
+R, R1, col, marker_list = CorrBehav2Spon.collect_corr(behav_down_dur, window_size,  marker_list) 
+
+           
+                
+CorrBehav2Spon.plot_corr(R, col, marker_list)                
+  
+            
+        
+        
+
+
+
 #
+
 
 

@@ -192,6 +192,19 @@ def remove_overlap_field(field_center, field_size, field_ids):
     return out, field_ids[flist]
 
 @schema
+class BorderDistance(dj.Lookup):
+    definition="""
+    # distance of unit to anatomy area borders
+    bd_distance       :       float   # distance to Border
+    ---
+    """
+    contents = [{'bd_distance':30},
+                {'bd_distance':50},
+                {'bd_distance':70},
+                {'bd_distance':100}
+                ]
+
+@schema
 class BorderRestrict(dj.Computed):
     definition=""" # remove units close to AreaBorder and field edge
     -> AreaMembership    
@@ -234,7 +247,7 @@ class BorderRestrict(dj.Computed):
             field_size = (um_height, um_width)
             field_restriction, field_order = remove_overlap_field(field_center, field_size, field_ids)
         
-        for bdist in [30, 50, 70, 100]:
+        for bdist in BorderDistance.fetch('bd_distance'):
         
             key1['border_distance_um'] = bdist
             self.insert1(key1)
