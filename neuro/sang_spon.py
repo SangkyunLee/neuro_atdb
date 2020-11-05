@@ -188,12 +188,16 @@ class Behav4Spon(dj.Computed):
     ->treadmill.Treadmill
     ->DownSampleDur.proj(behav_down_dur = 'duration')    # duration for behavior down-sampling
     ---
-    quantile_list         : external-deeplab        # quantile list during entire scan
-    pupil_stat            : external-deeplab        # activity level from quantile list
-    treadmill_stat        : external-deeplab        # activity level from quantile list
-    t                     : external-deeplab        # sampled timestamps in behavior clock
-    pupil_radius          : external-deeplab        # pupil radius
-    treadmil_absvel       : external-deeplab        # treadmil absolute velocity
+    quantile_list                   : external-deeplab        # quantile list during entire scan
+    pupil_stat                      : external-deeplab        # activity level from quantile list
+    pos_grad_pupil_stat            : external-deeplab        #  positive gradient pupil from quantile list
+    neg_grad_pupil_stat            : external-deeplab        # negative gradient pupil from quantile list
+    treadmill_stat                  : external-deeplab        # activity level from quantile list
+    t                                : external-deeplab        # sampled timestamps in behavior clock
+    pupil_radius                    : external-deeplab        # pupil radius
+    pos_gradient_pupil              : external-deeplab        # positive gradient pupil radius
+    neg_gradient_pupil              : external-deeplab        # negative gradient pupil radius
+    treadmill_absvel                 : external-deeplab        # treadmil absolute velocity
     """
     @property
     def key_source(self):
@@ -222,10 +226,21 @@ class Behav4Spon(dj.Computed):
         filter_shape = get_filter(dur, eye_sp)
         smooth_pupil = np.convolve(radius,filter_shape, mode='same')
         
+        pRd = np.gradient(smooth_pupil,eye_time)
+        pRdp =pRd.copy()
+        pRdn =pRd.copy()
+        pRdp[pRdp<0]=0
+        pRdn[pRdn>0]=0
+        pRdn = np.abs(pRdn)
+        
+        
         # NaNSpline allows to sample velocity at arbitary timepoints 
         # between min(treadmill_time) and max(treadmill_time) 
         treadmill_spline = NaNSpline(treadmill_time, smooth_v,k=1, ext=0) 
         pupil_spline = NaNSpline(eye_time, smooth_pupil, k=1, ext=0)
+        pG_pupil_spline = NaNSpline(eye_time, pRdp, k=1, ext=0) # positive gradient
+        nG_pupil_spline = NaNSpline(eye_time, pRdn, k=1, ext=0) # negative gradient
+        
         
         
         spon_start_idx = (Sponscan&scankey).fetch('spon_frame_start')[0]
@@ -235,27 +250,91 @@ class Behav4Spon(dj.Computed):
         # behavior trace for the entire scantime
         t1 = np.arange(ftimes_behav[0], spon_end_time,dur/2)
         pup1 = pupil_spline(t1)
+        pG_pup1 = pG_pupil_spline(t1)
+        nG_pup1 = nG_pupil_spline(t1)
         tread_v1 = treadmill_spline(t1)
         
-        a= np.vstack([pup1, tread_v1])
+        a= np.vstack([pup1, pG_pup1, nG_pup1, tread_v1])
         quantile_list = np.arange(0,1.05,0.1)
         stat = np.nanquantile(np.abs(a),quantile_list,axis=1)
         outkey['quantile_list'] = quantile_list
         outkey['pupil_stat'] = stat[:,0]
-        outkey['treadmill_stat'] = stat[:,0]
+        outkey['pos_grad_pupil_stat'] = stat[:,1]
+        outkey['neg_grad_pupil_stat'] = stat[:,2]
+        outkey['treadmill_stat'] = stat[:,3]
 
         t = ftimes_behav[spon_start_idx:]
         pup = pupil_spline(t)
+        pG_pup = pG_pupil_spline(t)
+        nG_pup = nG_pupil_spline(t)
         tread_v = treadmill_spline(t)
+        
+        
         outkey['t'] = t
         outkey['pupil_radius'] = pup
-        outkey['treadmil_absvel'] = abs(tread_v)
+        outkey['pos_gradient_pupil'] = pG_pup
+        outkey['neg_gradient_pupil'] = nG_pup
+        outkey['treadmill_absvel'] = abs(tread_v)
         dj.conn()
         self.insert1(outkey)
+        
+    @staticmethod    
+    def plot_stat(target, behav_down_dur, keys={}):
+        import seaborn as sns   
+
+        behav_dat = pd.DataFrame((Behav4Spon&keys&{'behav_down_dur':behav_down_dur}).fetch())
+        pupil_stat = behav_dat['pupil_stat'].to_numpy()
+        pupil_stat = np.vstack(pupil_stat)
+        pGpupil_stat = behav_dat['pos_grad_pupil_stat'].to_numpy()
+        pGpupil_stat = np.vstack(pGpupil_stat)
+        nGpupil_stat = behav_dat['neg_grad_pupil_stat'].to_numpy()
+        nGpupil_stat = np.vstack(nGpupil_stat)
+        
+        treadmill_stat = behav_dat['treadmill_stat'].to_numpy()
+        treadmill_stat = np.vstack(treadmill_stat)
+        
+        
+        quantile_list = behav_dat['quantile_list'].to_numpy()
+        quantile_list = np.vstack(quantile_list)
+        
+        behav_stat = pd.DataFrame({'quantile':quantile_list.flatten(), \
+                                   'treadmill':treadmill_stat.flatten(),\
+                                   'pupil':pupil_stat.flatten(),\
+                                    'pGpupil':pGpupil_stat.flatten(),\
+                                    'nGpupil':nGpupil_stat.flatten()} )
+        
+        
+        def get_unique_list(x):
+            unique_list = [x[0]]
+            for a in x:
+                for b in unique_list:
+                    if np.all(a != b):
+                        unique_list.append(a)
+            return unique_list
+        
+        x= get_unique_list(quantile_list)
+        assert len(x)==1, 'plotting is available for single quantile_list'
+        x = x[0]        
+        
+        xtick_labels = [ '{:.1f}'.format(xi)  for xi in x]
+        axs=[]
+        for y in target:
+            plt.figure(figsize=(10,5))
+            ax = sns.boxplot(x='quantile', y=y, data=behav_stat)
+            ax.set_xticklabels(xtick_labels)
+            axs.append(ax)
+        
+        return behav_stat, axs
 
         
 #popout = Behav4Spon.populate(order="random",display_progress=True,suppress_errors=True)        
-#popout = Behav4Spon.populate(display_progress=True)      
+#popout = Behav4Spon.populate(display_progress=True) 
+#data, ax =Behav4Spon.plot_stat(['treadmill','pupil'],behav_down_dur=0.5)        
+
+dat1 = data.groupby('quantile').describe()    
+dat1['treadmill']['25%']
+dat1['pupil']['min']    
+    
 @schema
 class BehavMarker(dj.Lookup):
     definition="""
@@ -293,7 +372,7 @@ class CorrBehav2Spon(dj.Computed):
         
         ba, layer, nunit, Pact = (SpontaneousActivity&key).fetch('brain_area','layer', 'unit_number','mean_activity')
         Pact = np.vstack(Pact)
-        t, pR, tV =  (Behav4Spon&key).fetch('t','pupil_radius','treadmil_absvel')
+        t, pR, tV =  (Behav4Spon&key).fetch('t','pupil_radius','treadmill_absvel')
         pRd = np.gradient(pR[0],t[0])
         pRdp =pRd.copy()
         pRdn =pRd.copy()
@@ -425,24 +504,25 @@ class CorrBehav2Spon(dj.Computed):
             plt.plot(xaxis, np.zeros(xaxis.shape),color='k', linestyle ='--', linewidth=1)
             
 #popout = CorrBehav2Spon.populate(display_progress=True)
-#popout = CorrBehav2Spon.populate(order="random",display_progress=True,suppress_errors=True)
+popout = CorrBehav2Spon.populate(order="random",display_progress=True,suppress_errors=True)
      
+# plot correlation between behavior marker and population activity
 behav_down_dur=0.5
 window_size = 0.5
 marker_list=['pupilR','Grad_pupilR','TreadV']            
 R, R1, col, marker_list = CorrBehav2Spon.collect_corr(behav_down_dur, window_size,  marker_list) 
+#keys = (dj.U('animal_id','session','scan_idx')&CorrBehav2Spon&{'behav_down_dur':0.5,'window_size':0.5,'border_distance_um':50}).fetch()
+#x =[ np.nansum(abs(R1[:,:,i])) for i in range(R1.shape[2]) ]      
+#idx = np.where(np.array(x)==0)[0]
+#keys[idx]
 
-           
-                
 CorrBehav2Spon.plot_corr(R, col, marker_list)                
-  
-            
-        
-        
+#################################################
+data, ax =Behav4Spon.plot_stat(['treadmill','pupil'],behav_down_dur=0.5)   
 
 
 
-#
+
 
 
 
