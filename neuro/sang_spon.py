@@ -358,12 +358,12 @@ class Behav4Spon(dj.Computed):
     
     @staticmethod
     def plot_active_period(mode,  thrs, behav_down_dur=0.5):
-    """
-    mode: ['pupil','treadmill','both'] to select active behavior state
-    thrs: quantile threshold for active condition
-        e.g.) {'pupil':0.8, 'pos_grad_pupil':0.9,'neg_grad_pupil':0.9,'treadmill': 0.9 }
-    behav_down_dur: down sampling duration
-    """
+        """
+        mode: ['pupil','treadmill','both'] to select active behavior state
+        thrs: quantile threshold for active condition
+            e.g.) {'pupil':0.8, 'pos_grad_pupil':0.9,'neg_grad_pupil':0.9,'treadmill': 0.9 }
+        behav_down_dur: down sampling duration
+        """
          
         
         data = Behav4Spon.get_stat(behav_down_dur)   
@@ -376,10 +376,7 @@ class Behav4Spon(dj.Computed):
         
         quantile_list = dat1.index.to_numpy()
         
-        
-        
-        
-        t, pupil_radius, pos_gradient_pupil, neg_gradient_pupil, treadmill_absvel =\
+        t, pupil_radius, pos_gradient_pupil, neg_gradient_pupil, treadmill_absvel = \
         (Behav4Spon&{'behav_down_dur':behav_down_dur}).fetch('t','pupil_radius',\
         'pos_gradient_pupil','neg_gradient_pupil','treadmill_absvel')
         
@@ -404,7 +401,7 @@ class Behav4Spon(dj.Computed):
                 ix0 = (pupil_radius[iscan]>pup_stat[ix])
                 ix = np.argmin(abs(quantile_list-thrs['pos_grad_pupil']))
                 ix1 = (pos_gradient_pupil[iscan]>pg_pup_stat[ix])
-                ix2=[]
+                ix2 = []
                 ix = np.argmin(abs(quantile_list-thrs['treadmill']))
                 ix3 = (treadmill_absvel[iscan]>treadmill_stat[ix])
                 
@@ -432,14 +429,16 @@ class Behav4Spon(dj.Computed):
 class BehavMarker(dj.Lookup):
     definition="""
     # Behavior Marker
-    marker       :       char(20)   # behavior marker
+    marker       :       char(50)   # behavior marker
     ---
     """
-    contents=[['pupilR'],       # pupil radius
-              ['Grad_pupilR'],  # Gradient of pupil radius
-              ['PGrad_pupilR'], # Positive Gradient of pupil radius
-              ['NGrad_pupilR'], # Negative Gradient of pupil radius
-              ['TreadV']]       # Velocity of Treadmill
+    contents=[['pupil_radius'],       # pupil radius
+              ['gradient_pupil'],  # Gradient of pupil radius
+              ['pos_gradient_pupil'], # Positive Gradient of pupil radius
+              ['neg_gradient_pupil'], # Negative Gradient of pupil radius
+              ['treadmill_absvel']]       # Velocity of Treadmill
+
+
 
 from functools import partial
 @schema
@@ -465,18 +464,15 @@ class CorrBehav2Spon(dj.Computed):
         
         ba, layer, nunit, Pact = (SpontaneousActivity&key).fetch('brain_area','layer', 'unit_number','mean_activity')
         Pact = np.vstack(Pact)
-        t, pR, tV =  (Behav4Spon&key).fetch('t','pupil_radius','treadmill_absvel')
+        t, pR,pRdp, pRdn, tV =  (Behav4Spon&key).fetch('t','pupil_radius','pos_gradient_pupil','neg_gradient_pupil','treadmill_absvel')
         pRd = np.gradient(pR[0],t[0])
-        pRdp =pRd.copy()
-        pRdn =pRd.copy()
-        pRdp[pRdp<0]=0
-        pRdn[pRdn>0]=0
-        pRdn = np.abs(pRdn)
+       
         
         min_ = min(len(t[0]), Pact.shape[1])
-        X =np.vstack((Pact[:,:min_],pR[0][:min_],pRd[:min_], pRdp[:min_],
-                      pRdn[:min_], tV[0][:min_]))
-        list_beh_marker = ['pupilR','Grad_pupilR','PGrad_pupilR','NGrad_pupilR','TreadV']
+        X =np.vstack((Pact[:,:min_], pR[0][:min_], pRd[:min_], pRdp[0][:min_],
+                      pRdn[0][:min_], tV[0][:min_]))
+        list_beh_marker = ['pupil_radius','gradient_pupil','pos_gradient_pupil',\
+                           'neg_gradient_pupil','treadmill_absvel']
         outkey['beh_markers']= ", ".join(list_beh_marker)
         
         
@@ -599,17 +595,17 @@ class CorrBehav2Spon(dj.Computed):
 #popout = CorrBehav2Spon.populate(display_progress=True)
 #popout = CorrBehav2Spon.populate(order="random",display_progress=True,suppress_errors=True)
 #     
-## plot correlation between behavior marker and population activity
-#behav_down_dur=0.5
-#window_size = 0.5
-#marker_list=['pupilR','Grad_pupilR','TreadV']            
-#R, R1, col, marker_list = CorrBehav2Spon.collect_corr(behav_down_dur, window_size,  marker_list) 
-##keys = (dj.U('animal_id','session','scan_idx')&CorrBehav2Spon&{'behav_down_dur':0.5,'window_size':0.5,'border_distance_um':50}).fetch()
-##x =[ np.nansum(abs(R1[:,:,i])) for i in range(R1.shape[2]) ]      
-##idx = np.where(np.array(x)==0)[0]
-##keys[idx]
-#
-#CorrBehav2Spon.plot_corr(R, col, marker_list)                
+# plot correlation between behavior marker and population activity
+behav_down_dur=0.5
+window_size = 0.5
+marker_list=['pupil_radius','pos_gradient_pupil','neg_gradient_pupil','treadmill_absvel']            
+R, R1, col, marker_list = CorrBehav2Spon.collect_corr(behav_down_dur, window_size,  marker_list) 
+#keys = (dj.U('animal_id','session','scan_idx')&CorrBehav2Spon&{'behav_down_dur':0.5,'window_size':0.5,'border_distance_um':50}).fetch()
+#x =[ np.nansum(abs(R1[:,:,i])) for i in range(R1.shape[2]) ]      
+#idx = np.where(np.array(x)==0)[0]
+#keys[idx]
+
+CorrBehav2Spon.plot_corr(R, col, marker_list)                
 #################################################
 
 
@@ -617,27 +613,28 @@ Behav4Spon.plot_stat_boxplot()
 Behav4Spon.plot_stat_median()
 
 @schema
-class BehavState(dj.Manual):
+class BehavThr(dj.Manual):
     definition="""
-    # Behavior State definition    
+    # Threshold for Behavior State    
     state_id       :       tinyint   # behavior state id    
     state                : enum('active','intermediate','quiet')
+    mode                      :     varchar(10)
     ---
     pupil_min = -1           :      float  
     pupil_max = -1           :      float
-    pgrad_pupil_min = -1       :      float  
-    pgrad_pupil_max = -1       :      float
-    ngrad_pupil_min = -1       :      float  
-    ngrad_pupil_max = -1       :      float  
+    pos_grad_pupil_min = -1       :      float  
+    pos_grad_pupil_max = -1       :      float
+    neg_grad_pupil_min = -1       :      float  
+    neg_grad_pupil_max = -1       :      float  
     tread_vel_min = -1         :      float
     tread_vel_max = -1         :      float 
     quantile_threshold         :      varchar(256)
     """
     
     @staticmethod
-    def create_state_params(thresholds, mode):
+    def set_thresholds(thresholds, mode):
         """
-        create_state_params
+        set_thresholds
         With given threshold list, create active and quiet condition 
         in 3 modes: pupil, treadmill, both.
         """
@@ -660,20 +657,20 @@ class BehavState(dj.Manual):
             active_cond ={'state':'active', \
                        'pupil_min': pup_stat[ipup],\
                        'pupil_max': -1,\
-                       'pgrad_pupil_min':pg_pup_stat[ipg],\
-                       'pgrad_pupil_max': -1,\
-                       'ngrad_pupil_min': ng_pup_stat[ing],\
-                       'ngrad_pupil_max': -1,\
+                       'pos_grad_pupil_min':pg_pup_stat[ipg],\
+                       'pos_grad_pupil_max': -1,\
+                       'neg_grad_pupil_min': ng_pup_stat[ing],\
+                       'neg_grad_pupil_max': -1,\
                        'tread_vel_min': -1,\
                        'tread_vel_max': -1}
             
             quiet_cond ={'state':'quiet', \
                        'pupil_min': -1,\
                        'pupil_max': pup_stat[ipup],\
-                       'pgrad_pupil_min':-1,\
-                       'pgrad_pupil_max': pg_pup_stat[ipg],\
-                       'ngrad_pupil_min': -1,\
-                       'ngrad_pupil_max': ng_pup_stat[ing],\
+                       'pos_grad_pupil_min':-1,\
+                       'pos_grad_pupil_max': pg_pup_stat[ipg],\
+                       'neg_grad_pupil_min': -1,\
+                       'neg_grad_pupil_max': ng_pup_stat[ing],\
                        'tread_vel_min': -1,\
                        'tread_vel_max': -1}
             
@@ -682,19 +679,19 @@ class BehavState(dj.Manual):
             active_cond ={'state':'active', \
                        'pupil_min': -1,\
                        'pupil_max': -1,\
-                       'pgrad_pupil_min':-1,\
-                       'pgrad_pupil_max': -1,\
-                       'ngrad_pupil_min': -1,\
-                       'ngrad_pupil_max': -1,\
+                       'pos_grad_pupil_min':-1,\
+                       'pos_grad_pupil_max': -1,\
+                       'neg_grad_pupil_min': -1,\
+                       'neg_grad_pupil_max': -1,\
                        'tread_vel_min': treadmill_stat[itread],\
                        'tread_vel_max': -1}
             quiet_cond ={'state':'quiet', \
                        'pupil_min': -1,\
                        'pupil_max': -1,\
-                       'pgrad_pupil_min':-1,\
-                       'pgrad_pupil_max': -1,\
-                       'ngrad_pupil_min': -1,\
-                       'ngrad_pupil_max': -1,\
+                       'pos_grad_pupil_min':-1,\
+                       'pos_grad_pupil_max': -1,\
+                       'neg_grad_pupil_min': -1,\
+                       'neg_grad_pupil_max': -1,\
                        'tread_vel_min': -1,\
                        'tread_vel_max': treadmill_stat[itread]}
             
@@ -706,58 +703,59 @@ class BehavState(dj.Manual):
             active_cond ={'state':'active', \
                        'pupil_min': pup_stat[ipup],\
                        'pupil_max': -1,\
-                       'pgrad_pupil_min':pg_pup_stat[ipg],\
-                       'pgrad_pupil_max': -1,\
-                       'ngrad_pupil_min': ng_pup_stat[ing],\
-                       'ngrad_pupil_max': -1,\
+                       'pos_grad_pupil_min':pg_pup_stat[ipg],\
+                       'pos_grad_pupil_max': -1,\
+                       'neg_grad_pupil_min': ng_pup_stat[ing],\
+                       'neg_grad_pupil_max': -1,\
                        'tread_vel_min': treadmill_stat[itread],\
                        'tread_vel_max': -1}
             
             quiet_cond ={'state':'quiet', \
                        'pupil_min': -1,\
                        'pupil_max': pup_stat[ipup],\
-                       'pgrad_pupil_min':-1,\
-                       'pgrad_pupil_max': pg_pup_stat[ipg],\
-                       'ngrad_pupil_min': -1,\
-                       'ngrad_pupil_max': ng_pup_stat[ing],\
+                       'pos_grad_pupil_min':-1,\
+                       'pos_grad_pupil_max': pg_pup_stat[ipg],\
+                       'neg_grad_pupil_min': -1,\
+                       'neg_grad_pupil_max': ng_pup_stat[ing],\
                        'tread_vel_min': -1,\
                        'tread_vel_max': treadmill_stat[itread]}
         else:
             raise NotImplementedError('mode {}  not implemented'.format(mode))
         
-        active['quantile_threshold'] = str(thresholds)
-        quiet['quantile_threshold'] = str(thresholds)
+        active_cond['quantile_threshold'] = str(thresholds)
+        active_cond['mode'] = mode
+        quiet_cond['quantile_threshold'] = str(thresholds)
+        quiet_cond['mode'] = mode
         
         return active_cond, quiet_cond
 
 
 
 
-    
-thrs ={'pupil':0.8, 'pos_grad_pupil':0.9,'neg_grad_pupil':0.9,'treadmill': 0.9 }  
-Behav4Spon.plot_active_period('pupil', thrs)
-Behav4Spon.plot_active_period('both', thrs)
-
+#    
+##thrs ={'pupil':0.8, 'pos_grad_pupil':0.9,'neg_grad_pupil':0.9,'treadmill': 0.9 }  
+##Behav4Spon.plot_active_period('pupil', thrs)
+##Behav4Spon.plot_active_period('both', thrs)
+#
 
 thrs ={'pupil':0.8, 'pos_grad_pupil':0.9,'neg_grad_pupil':0.9,'treadmill': 0.9 } 
-active, quiet = BehavState.create_state_params(thrs, 'pupil')
+active, quiet = BehavThr.set_thresholds(thrs, 'pupil')
 active['state_id']=0
 quiet['state_id']=0
-BehavState.insert1(active)
-BehavState.insert1(quiet)
+BehavThr.insert1(active)
+BehavThr.insert1(quiet)
 
 
-active, quiet = BehavState.create_state_params(thrs, 'treadmill')
+active, quiet = BehavThr.set_thresholds(thrs, 'treadmill')
 active['state_id']=1
 quiet['state_id']=1
-BehavState.insert1(active)
-BehavState.insert1(quiet)
+BehavThr.insert1(active)
+BehavThr.insert1(quiet)
 
 #both include pupil and treadmill
-active, quiet = BehavState.create_state_params(thrs, 'both')
+active, quiet = BehavThr.set_thresholds(thrs, 'both')
 active['state_id']=2
 quiet['state_id']=2
-BehavState.insert1(active)
-BehavState.insert1(quiet)
-
+BehavThr.insert1(active)
+BehavThr.insert1(quiet)
 
