@@ -281,6 +281,15 @@ class Behav4Spon(dj.Computed):
         
     @staticmethod
     def get_stat(behav_down_dur, keys={}):
+        """
+        Output:
+            DataFrame: 'quantile': quantile list for stat
+           'treadmill':treadmill_stat
+           'pupil':pupil_stat
+           'pos_grad_pupil': stat for positive gradient of pupil radius
+           'neg_grad_pupil': stat for negative gradient of pupil radius
+            
+        """
         behav_dat = pd.DataFrame((Behav4Spon&keys&{'behav_down_dur':behav_down_dur}).fetch())
         pupil_stat = behav_dat['pupil_stat'].to_numpy()
         pupil_stat = np.vstack(pupil_stat)
@@ -507,7 +516,7 @@ class CorrBehav2Spon(dj.Computed):
         e.g. 
         behav_down_dur=0.5
         window_size = 2
-        marker_list=['pupilR','TreadV']
+        marker_list=['pupil_radius','treadmill_absvel']
         """
         
 #        marker_list=['Grad_pupilR','PGrad_pupilR','NGrad_pupilR']
@@ -737,25 +746,172 @@ class BehavThr(dj.Manual):
 ##Behav4Spon.plot_active_period('pupil', thrs)
 ##Behav4Spon.plot_active_period('both', thrs)
 #
+#
+#thrs ={'pupil':0.8, 'pos_grad_pupil':0.9,'neg_grad_pupil':0.9,'treadmill': 0.9 } 
+#active, quiet = BehavThr.set_thresholds(thrs, 'pupil')
+#active['state_id']=0
+#quiet['state_id']=0
+#BehavThr.insert1(active)
+#BehavThr.insert1(quiet)
+#
+#
+#active, quiet = BehavThr.set_thresholds(thrs, 'treadmill')
+#active['state_id']=1
+#quiet['state_id']=1
+#BehavThr.insert1(active)
+#BehavThr.insert1(quiet)
+#
+##both include pupil and treadmill
+#active, quiet = BehavThr.set_thresholds(thrs, 'both')
+#active['state_id']=2
+#quiet['state_id']=2
+#BehavThr.insert1(active)
+#BehavThr.insert1(quiet)
 
-thrs ={'pupil':0.8, 'pos_grad_pupil':0.9,'neg_grad_pupil':0.9,'treadmill': 0.9 } 
-active, quiet = BehavThr.set_thresholds(thrs, 'pupil')
-active['state_id']=0
-quiet['state_id']=0
-BehavThr.insert1(active)
-BehavThr.insert1(quiet)
 
 
-active, quiet = BehavThr.set_thresholds(thrs, 'treadmill')
-active['state_id']=1
-quiet['state_id']=1
-BehavThr.insert1(active)
-BehavThr.insert1(quiet)
+@schema
+class Activity4BehavState(dj.Computed):
+    definition ="""
+    ->BorderRestrict
+    ->Behav4Spon
+    ->DownSampleDur.proj(window_size = 'duration')
+    ->BehavThr
+    ---
+    brain_areas         : varchar(512)    # brain_area list
+    layers              : varchar(256)      # layer list    
+    nunit               : external-deeplab      # list of nunit
+    population_activity : external-deeplab      # np.array unit x timesamples
+    t                   : external-deeplab      # timesamples
+    """
+    @property
+    def key_source(self):
+        return  ((BorderRestrict*Behav4Spon)*DownSampleDur.proj(window_size='duration')*BehavThr)&'window_size>=0.5 or window_size=0'
+        
+    
+#    keys_dict = keys.fetch('KEY')
+#    key =keys_dict[0]
+    
+    class Behav(dj.Part):
+        definition = """
+        ->master
+        ->BehavMarker
+        ---
+        trace    :  external-deeplab     # behavior trace  
+        """
+    
+    
+    def make(self, key):
+        outkey = key.copy()
+        print(key)
+        
+        ba, layer, nunit, Pact = (SpontaneousActivity&key).fetch('brain_area','layer', 'unit_number','mean_activity')
+        Pact = np.vstack(Pact)
+        t, pupil, pgrad_pupil, ngrad_pupil, tread_vel =  (Behav4Spon&key).fetch(
+                't','pupil_radius','pos_gradient_pupil', 'neg_gradient_pupil','treadmill_absvel')
 
-#both include pupil and treadmill
-active, quiet = BehavThr.set_thresholds(thrs, 'both')
-active['state_id']=2
-quiet['state_id']=2
-BehavThr.insert1(active)
-BehavThr.insert1(quiet)
+        
 
+        
+        thrs = (BehavThr&key).fetch(as_dict=True)[0]
+        
+        pup_idx = (pupil[0]>thrs['pupil_min']) & \
+        ((pupil[0]<thrs['pupil_max'])  \
+        if thrs['pupil_max']>0 else np.full_like(pupil[0],1).astype(bool))
+        
+        
+        pg_pup_idx = (pgrad_pupil[0]>thrs['pos_grad_pupil_min']) & \
+        ((pgrad_pupil[0]<thrs['pos_grad_pupil_max'])  \
+        if thrs['pos_grad_pupil_max']>0 else np.full_like(pgrad_pupil[0],1).astype(bool))
+        
+        
+        ng_pup_idx = (ngrad_pupil[0]>thrs['neg_grad_pupil_min']) & \
+        ((ngrad_pupil[0]<thrs['neg_grad_pupil_max'])  \
+        if thrs['neg_grad_pupil_max']>0 else np.full_like(ngrad_pupil[0],1).astype(bool))
+        
+        
+        tread_idx = (tread_vel[0]>thrs['tread_vel_min']) & \
+        ((tread_vel[0]<thrs['tread_vel_max'])  \
+        if thrs['tread_vel_max']>0 else np.full_like(tread_vel[0],1).astype(bool))
+        
+        
+        behav_idx = (pup_idx | pg_pup_idx | ng_pup_idx) & tread_idx
+        
+        pupil, pgrad_pupil, ngrad_pupil, tread_vel
+      
+        
+        min_ = min(len(t[0]), Pact.shape[1])
+        t = t[0][:min_]
+        behav_idx =behav_idx[:min_]
+        
+        X =np.vstack((Pact[:,:min_],\
+                      pupil[0][:min_],\
+                      pgrad_pupil[0][:min_],\
+                      ngrad_pupil[0][:min_],\
+                      tread_vel[0][:min_]))      
+
+        list_beh_marker = ['pupil_radius','pos_gradient_pupil',\
+                           'neg_gradient_pupil','treadmill_absvel']
+        
+        
+        
+        def down_sample(t,X, windowsize, filter_shape='avg'):
+            """
+            down_sample(t,X, windowsize)
+            t = np.array with regularly sampled time stamps
+            X = 2D np.array: row- no. signal x column- time sample
+            windowsize: in second
+            filter_shape = 'avg'(default) 
+            """
+            sampling_period = np.nanmedian(np.diff(t))
+            h = get_filter(windowsize,sampling_period,'avg')
+            fun = partial(np.convolve,v=h, mode='same')
+            
+            
+            X_ = list(map(fun,X))            
+            X_ = np.vstack(X_)
+            X = X_[:,int(len(h)/2):-1:len(h)]
+            
+            t_ = fun(t)
+            t = t_[int(len(h)/2):-1:len(h)]
+            return X, t
+            
+        
+        windowsize = key['window_size']
+        if windowsize > 0:
+            X, _ = down_sample(t,X, windowsize, filter_shape='avg')
+            behav_,t = down_sample(t,behav_idx[np.newaxis,:], windowsize, filter_shape='avg')
+            behav_idx = behav_.flatten()>0.5
+        X= X[:,behav_idx]
+        t = t[behav_idx]
+            
+            
+        
+        idx  = ~np.isnan(X)
+        idx = np.all(idx, axis=0)
+        X = X[:,idx]
+        t = t[idx]
+        nroi = len(ba)
+        
+        
+        outkey['brain_areas'] = ", ".join(ba)
+        outkey['layers'] = ", ".join(layer)
+        outkey['nunit'] = nunit
+        outkey['population_activity'] = X[:nroi,:]
+        outkey['t'] = t
+        dj.conn()
+        self.insert1(outkey)
+        Xbeh = X[nroi:]
+        for i, beh in enumerate(list_beh_marker):
+            behkey = key.copy()
+            behkey['marker'] =beh 
+            behkey['trace'] = X[i]
+            Activity4BehavState.Behav.insert1(behkey)
+            
+            
+popout = Activity4BehavState.populate(order="random",display_progress=True,suppress_errors=True)        
+#popout = Activity4BehavState.populate(display_progress=True)         
+        
+@schema
+class PAcorr(dj.Computed):        
+        
