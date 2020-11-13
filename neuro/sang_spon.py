@@ -909,9 +909,255 @@ class Activity4BehavState(dj.Computed):
             Activity4BehavState.Behav.insert1(behkey)
             
             
-popout = Activity4BehavState.populate(order="random",display_progress=True,suppress_errors=True)        
+#popout = Activity4BehavState.populate(order="random",display_progress=True,suppress_errors=True)        
 #popout = Activity4BehavState.populate(display_progress=True)         
         
 @schema
-class PAcorr(dj.Computed):        
+class PAcorr(dj.Computed):  
+    definition = """ #correlation coefficient of population activity
+    -> Activity4BehavState
+    ---
+    brain_areas         : varchar(512)    # brain_area list
+    layers              : varchar(256)      # layer list 
+    corr                : blob
+    nsample             : int             # number of sample
+    """      
         
+    def make(self, key):
+        ba, layers, pa = (Activity4BehavState&key).fetch('brain_areas','layers', 'population_activity')
+        
+        outkey = key.copy()
+        outkey['brain_areas'] = ba[0]
+        outkey['layers'] = layers[0]
+        outkey['corr'] =  np.corrcoef(pa[0])
+        outkey['nsample'] = pa[0].shape[1]
+        self.insert1(outkey)
+    
+    @staticmethod
+    def collect_corr(behavcond={}, preproc={'border_distance_um':30, 'behav_down_dur':0.5, 'window_size':0.5}, nsample_thr =100):   
+        """
+        def collect_corr(self, behavcond={}, preproc={'border_distance_um':30, 'behav_down_dur':0.5, 'window_size':0.5}, nsample_thr =500)
+        
+        collect correlation matrix across scans with behavcond
+        if multiple behavor conditions are satfisfied with query,
+        weigthed average of correlation is computed
+        
+        e.g., behavcond ={'state_id':1, 'mode':'treadmill'}
+        the correlations for 'state'='active' and 'quiet' are sample number weighted averaged.
+               
+        
+        """
+        
+        
+        bas=[]
+        las=[]
+        scan_list =[]
+        corr_list=[]
+        
+
+            
+        datkey = PAcorr&preproc &behavcond            
+        scankeys = dj.U('animal_id','session','scan_idx')&datkey
+            
+            
+        for sci in scankeys.fetch('KEY'):
+            ba_, la_, corr, nsample = (datkey&sci).fetch('brain_areas','layers',
+                                      'corr','nsample')
+            ncond = len(datkey&sci)
+            if np.all(nsample>nsample_thr):
+                print(sci)
+                total_sample =0
+                
+                for i in range(ncond):
+                    total_sample += nsample[i]
+                    if i==0:
+                        corr_ = nsample[i]*corr[i] 
+                    else:
+                        corr_ += nsample[i]*corr[i] 
+                aggcorr = corr_/total_sample       
+                bas.append(ba_[0]) 
+                las.append(la_[0])
+                corr_list.append(aggcorr)
+                scan_list.append(sci)
+                
+        return bas, las, corr_list, scan_list
+    
+    
+    @staticmethod
+    def sort_unique_area(brain_areas_list, layers_list):
+        """
+        sort unique area list from list of areas
+        since each scan contains different areas, extract common area list across scans
+        """
+        uba = [np.array(list(zip(ba.split(', '),la.split(', ')))) for ba,la in zip(brain_areas_list,layers_list)]
+        uba = np.vstack(uba)
+        area_list = np.unique(uba,axis=0)
+        return area_list
+    
+    @staticmethod
+    def sort_corr_byarea(corrs, scans, brain_areas, layers, groupby=None): 
+        """
+        corrs: list of correlation matrix
+        scans: list of tuple of animal_id, session, scan_idx
+        brain_areas: list of brain_areas of each scan
+        layers: list of layers of each scan
+        groupby='Scan': scan average of correlation 
+        
+        each scan contains correlation from a different set of areas
+        sort corrs with a common list of brain areas and layers
+        and also average corr across scans with each session
+        """
+        
+        area_list = PAcorr.sort_unique_area(brain_areas, layers) 
+        na = len(area_list)
+        
+        corrmaps = np.full((na,na,len(scans)),fill_value=np.nan)
+        for sci in range(len(scans)): # scan index                
+            brain_area = brain_areas[sci].split(', ')
+            layer = layers[sci].split(', ')
+            n = len(brain_area)
+            for i in range(n):
+                ba_ = brain_area[i]
+                la_ = layer[i]
+                idx1 = np.where((area_list[:,0]==ba_) &(area_list[:,1]==la_))[0]
+                for j in range(n):
+                    ba_ = brain_area[j]
+                    la_ = layer[j]
+                    idx2 = np.where((area_list[:,0]==ba_) &(area_list[:,1]==la_))[0]
+                    corrmaps[idx1,idx2,sci] = corrs[sci][i,j]                    
+                    
+        if groupby == None:
+            return corrmaps, area_list, scans
+              
+        elif groupby=='scan':  
+            a = pd.DataFrame(scans).groupby(['animal_id','session'])
+            ses_keys = list(a.indices.keys())    
+            corrmaps_session = np.full(corrmaps.shape[:2]+(len(ses_keys),), fill_value=np.nan)
+            for i, key in enumerate(ses_keys):
+                indices = a.indices[key]
+                print(indices)
+                mcorr  = np.nanmean(corrmaps[:,:,indices],axis=2)
+                corrmaps_session[:,:,i]= mcorr
+                
+            return corrmaps_session, area_list, ses_keys
+        else:
+            raise NotImplementedError('groupby {}  not implemented'.format(groupby))
+            
+    @staticmethod
+    def plot_corr_errorbar(corrmaps, area_list, hfigs=[]):
+        """
+        plot_corr_errorbar(corrmaps, area_list, hfigs=[])
+        corrmaps: roi x roi x samples
+        area_list: roi x 2
+        plot correlation with errorbar across samples
+        """
+        
+        
+        legend_str =[a[:2]+'\n'+b for a, b in area_list] 
+
+        mean_mcorr = np.nanmean(corrmaps, axis=2)
+        std_mcorr = np.nanstd(corrmaps, axis=2)
+        vcorrmaps = np.sum(~np.isnan(corrmaps),axis=2)
+        se_mcorr = std_mcorr/np.sqrt(vcorrmaps)
+        
+        
+        for idx in range(corrmaps.shape[0]):
+      
+            plt.figure(figsize=(15,5))
+            yid = np.argsort(mean_mcorr[idx,:])[::-1]  
+            n = list(range(len(yid)))
+            plt.errorbar(n, mean_mcorr[idx,yid], se_mcorr[idx,yid])
+            plt.plot(n, np.full_like(n,fill_value=0),'--', linewidth=1)
+            plt.xticks(n,np.array(legend_str)[yid])
+            plt.title(legend_str[idx])
+
+        return hfigs
+    
+    @staticmethod
+    def plot_corr_errorbar_multi(corrmaps, area_list, sortby=None):
+        """
+        plot_errorbar for list of correlation maps from different conditions, e.g., active vs quiet
+        plot_corr_errorbar_multi(corrmaps, area_list, hfigs=[])
+        corrmaps: list(roi x roi x samples)
+        area_list: roi x 2
+        plot correlation with errorbar across samples
+        """
+        legend_str =[a[:2]+'\n'+b for a, b in area_list] 
+        mean_mcorr =[]
+        se_mcorr=[]
+        for i in range(len(corrmaps)):        
+            std_mcorr = np.nanstd(corrmaps[i], axis=2)
+            vcorrmaps = np.sum(~np.isnan(corrmaps[i]),axis=2)
+            se_mcorr.append(std_mcorr/np.sqrt(vcorrmaps))
+            mean_mcorr.append(np.nanmean(corrmaps[i], axis=2))
+        
+        for idx in range(len(area_list)):
+            hfig = plt.figure(figsize=(15,5))
+            for i in range(len(corrmaps)):
+                plt.subplot(len(corrmaps),1,i+1)   
+                if sortby=='Value':
+                    yid = np.argsort(mean_mcorr[i][idx,:])[::-1]
+                else:
+                    yid = list(range(len(yid)))
+                    
+                n= list(range(len(yid)))    
+                plt.errorbar(n, mean_mcorr[i][idx,yid], se_mcorr[i][idx,yid])
+                plt.xticks(n,np.array(legend_str)[yid])
+                plt.title(legend_str[idx])
+
+def common_idx(x, y):
+    """ 
+    common index of two lists x and y
+    x and y should be a sorted list     
+    """
+    i=0
+    j=0
+    xlist = []
+    ylist = []
+    common_list=[]
+    while (i<len(x)) :
+        while (j<len(y)):        
+            if x[i]==y[j]:
+                xlist.append(i)
+                ylist.append(j)       
+                common_list.append(x[i])
+                i+=1
+                j+=1
+            else:
+                j+=1
+        j = i
+        i+=1 
+    return common_list, xlist, ylist    
+#popout = PAcorr.populate(display_progress=True)         
+#popout = PAcorr.populate(order="random",display_progress=True,suppress_errors=True)   
+        
+# for both quiet and active
+bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill'})
+
+bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'quiet'})    
+corrmaps1, area_list, ses_keys =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan')     
+
+bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'active'})    
+corrmaps2, area_list2, ses_keys2 =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan')     
+     
+#hfigs = PAcorr.plot_corr_errorbar(corrmaps, area_list)
+#hfigs = PAcorr.plot_corr_errorbar(corrmaps2, area_list, hfigs)
+
+
+        
+
+                
+    
+corrmaps = [corrmaps1, corrmaps2]
+PAcorr.plot_corr_errorbar_multi(corrmaps, area_list, sortby='Value')
+
+
+#difference of correlation (active - quiet)
+idx,xi,yi  = common_idx(ses_keys, ses_keys2)
+Diff_corrmaps = corrmaps2[:,:,yi] - corrmaps1[:,:,xi]
+
+# remove unknown area and L1 imaging
+idx2 = np.where(~((area_list[:,0]=='unknown') | (area_list[:,1]=='L1')))[0]
+
+PAcorr.plot_corr_errorbar(Diff_corrmaps[idx2][:,idx2,:], area_list[idx2,:])
+
