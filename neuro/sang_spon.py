@@ -781,12 +781,16 @@ class Activity4BehavState(dj.Computed):
     brain_areas         : varchar(512)    # brain_area list
     layers              : varchar(256)      # layer list    
     nunit               : external-deeplab      # list of nunit
-    population_activity : external-deeplab      # np.array unit x timesamples
+    population_activity : external-deeplab      # np.array area x timesamples
+    unitslice_area      : external-deeplab      # slice(start, end) x narea for activity_matrix (NOTE: This is not unit id)
+    activity_matrix     : external-deeplab      # np.array unit x timesamples    
     t                   : external-deeplab      # timesamples
     """
     @property
     def key_source(self):
-        return  ((BorderRestrict*Behav4Spon)*DownSampleDur.proj(window_size='duration')*BehavThr)&'window_size>=0.5 or window_size=0'
+        return  ((BorderRestrict*Behav4Spon)*DownSampleDur.proj(\
+                 window_size='duration')*BehavThr)&\
+                 'window_size>=0.5 or window_size=0'
         
     
 #    keys_dict = keys.fetch('KEY')
@@ -805,8 +809,13 @@ class Activity4BehavState(dj.Computed):
         outkey = key.copy()
         print(key)
         
-        ba, layer, nunit, Pact = (SpontaneousActivity&key).fetch('brain_area','layer', 'unit_number','mean_activity')
+        ba, layer, nunit, Pact, Uact = (SpontaneousActivity&key).fetch(
+                                       'brain_area','layer', 'unit_number',
+                                       'mean_activity', 'activity_matrix')
         Pact = np.vstack(Pact)
+        
+        
+        
         t, pupil, pgrad_pupil, ngrad_pupil, tread_vel =  (Behav4Spon&key).fetch(
                 't','pupil_radius','pos_gradient_pupil', 'neg_gradient_pupil','treadmill_absvel')
 
@@ -834,12 +843,9 @@ class Activity4BehavState(dj.Computed):
         ((tread_vel[0]<thrs['tread_vel_max'])  \
         if thrs['tread_vel_max']>0 else np.full_like(tread_vel[0],1).astype(bool))
         
-        
         behav_idx = (pup_idx | pg_pup_idx | ng_pup_idx) & tread_idx
-        
-        pupil, pgrad_pupil, ngrad_pupil, tread_vel
-      
-        
+ 
+    
         min_ = min(len(t[0]), Pact.shape[1])
         t = t[0][:min_]
         behav_idx =behav_idx[:min_]
@@ -880,11 +886,29 @@ class Activity4BehavState(dj.Computed):
         windowsize = key['window_size']
         if windowsize > 0:
             X, _ = down_sample(t,X, windowsize, filter_shape='avg')
+            for i in range(len(Uact)):
+                Uact[i], _ = down_sample(t,Uact[i].T, windowsize, filter_shape='avg')
+                
             behav_,t = down_sample(t,behav_idx[np.newaxis,:], windowsize, filter_shape='avg')
             behav_idx = behav_.flatten()>0.5
+        else:
+            for i in range(len(Uact)):
+                Uact[i] = Uact[i].T
+            
+                
+            
+            
         X= X[:,behav_idx]
         t = t[behav_idx]
-            
+        nu = np.array([a.shape[0] for a in Uact])
+        nu1 = np.cumsum(np.insert(nu,0,0))[:-1]
+        nu2 = np.cumsum(nu)
+        nu_idx = np.vstack((nu1,nu2)) # area_slice for Uact_shape
+        Uact_state = np.full((sum(nu), t.shape[0]), np.nan )
+        
+        for i in range(len(Uact)):
+            idx = slice(nu_idx[0,i],nu_idx[1,i])
+            Uact_state [idx,:] = Uact[i][:,behav_idx]
             
         
         idx  = ~np.isnan(X)
@@ -898,7 +922,11 @@ class Activity4BehavState(dj.Computed):
         outkey['layers'] = ", ".join(layer)
         outkey['nunit'] = nunit
         outkey['population_activity'] = X[:nroi,:]
+        
+        outkey['activity_matrix'] = Uact_state
+        outkey['unitslice_area'] = nu_idx
         outkey['t'] = t
+        
         dj.conn()
         self.insert1(outkey)
         Xbeh = X[nroi:]
@@ -909,7 +937,7 @@ class Activity4BehavState(dj.Computed):
             Activity4BehavState.Behav.insert1(behkey)
             
             
-#popout = Activity4BehavState.populate(order="random",display_progress=True,suppress_errors=True)        
+popout = Activity4BehavState.populate(order="random",display_progress=True,suppress_errors=True)        
 #popout = Activity4BehavState.populate(display_progress=True)         
         
 @schema
@@ -1130,34 +1158,136 @@ def common_idx(x, y):
     return common_list, xlist, ylist    
 #popout = PAcorr.populate(display_progress=True)         
 #popout = PAcorr.populate(order="random",display_progress=True,suppress_errors=True)   
-        
-# for both quiet and active
-bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill'})
-
-bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'quiet'})    
-corrmaps1, area_list, ses_keys =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan')     
-
-bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'active'})    
-corrmaps2, area_list2, ses_keys2 =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan')     
-     
-#hfigs = PAcorr.plot_corr_errorbar(corrmaps, area_list)
-#hfigs = PAcorr.plot_corr_errorbar(corrmaps2, area_list, hfigs)
 
 
-        
+####################
+"""
+plot PA correlation with state
+"""        
+## for both quiet and active
+#bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill'})
+#
+#bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'quiet'})    
+#corrmaps1, area_list, ses_keys =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan')     
+#
+#bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'active'})    
+#corrmaps2, area_list2, ses_keys2 =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan')     
+#     
+##hfigs = PAcorr.plot_corr_errorbar(corrmaps, area_list)
+##hfigs = PAcorr.plot_corr_errorbar(corrmaps2, area_list, hfigs)
+#
+#
+#        
+#
+#                
+#    
+#corrmaps = [corrmaps1, corrmaps2]
+#PAcorr.plot_corr_errorbar_multi(corrmaps, area_list, sortby='Value')
+#
+#
+##difference of correlation (active - quiet)
+#idx,xi,yi  = common_idx(ses_keys, ses_keys2)
+#Diff_corrmaps = corrmaps2[:,:,yi] - corrmaps1[:,:,xi]
+#
+## remove unknown area and L1 imaging
+#idx2 = np.where(~((area_list[:,0]=='unknown') | (area_list[:,1]=='L1')))[0]
+#PAcorr.plot_corr_errorbar(Diff_corrmaps[idx2][:,idx2,:], area_list[idx2,:])
 
-                
+
+
+@schema
+class IntraAreaUnitCorr(dj.Computed):
+    definition = """ #correlation coefficient of unit activity
+    -> Activity4BehavState
+    ---
+    brain_areas         : varchar(512)    # brain_area list
+    layers              : varchar(256)      # layer list 
+    corr_mean           : blob             # correlation_mean across bas
+    corr_median         : blob             # correlation_median across bas
+    zscore_thresholds    : blob            #
+    tail_means           : external-deeplab      # significant high correlation: brain_areas x zscore_threshold     
+
+    """
     
-corrmaps = [corrmaps1, corrmaps2]
-PAcorr.plot_corr_errorbar_multi(corrmaps, area_list, sortby='Value')
+    class UnitList(dj.Part):
+        definition = """  # Units with significantly high or low correlations
+        ->master
+        brain_area             : varchar(20)
+        layer                  : varchar(20)        
+        zscore_threshold       : float    # zscore_threshold for left or right
+        ---
+        unit_list        : external-deeplab   # list of unit           
+        """
+        
 
+    
+    def make(self, key):
+        ba, layers, Uact, unitidx = (Activity4BehavState&key).fetch('brain_areas','layers', 'activity_matrix','unitslice_area')
+        outkey = key.copy()
+        outkey['brain_areas'] = ba[0]
+        outkey['layers'] = layers[0]
+        
+        ba = ba[0].split(', ')
+        layers = layers[0].split(', ')       
+        scales = np.array([-10, -7, -5, -3, 3, 5, 7, 10])   
+        
+        median=[]
+        mean=[]
+        tail_mean = np.full((len(ba),len(scales)), fill_value=np.nan)
+        unit_ids_sel = {}
+        for i in range(len(ba)):
+            
+            idx = slice(unitidx[0][0,i],unitidx[0][1,i])
+            Uact_ = Uact[0][idx,:]
+            corr = np.corrcoef(Uact_)
+            ut_idx = np.triu_indices(corr.shape[0],k=1)
+            corr = corr[ut_idx]
+            stat = pd.DataFrame(corr).describe()
+            mean_ = stat.loc['mean'].to_numpy()[0]
+            median_ = stat.loc['50%'].to_numpy()[0]
+            std_ = stat.loc['std'].to_numpy()[0]
+            mean.append(mean_)
+            median.append(median_)
+            
+             
+            areakey={'brain_area': ba[i],'layer':layers[i]}            
+            for j, scale in enumerate(scales):                
+                thr = mean_ + scale*std_
+                if scale>0:
+                    sidx = corr>thr
+                else:
+                    sidx = corr<thr
+                tail_mean[i,j] = corr[sidx].mean()
+                
+                unit_ids = (SpontaneousActivity&{**key, **areakey}).fetch('unit_ids')[0]
+                sidx2 = (ut_idx[0][sidx],ut_idx[1][sidx])                
+                unit_ids_sel[i,j]  = unit_ids[np.unique(np.hstack(sidx2))]
+            
+       
+        outkey['corr_mean'] = mean
+        outkey['corr_median'] = median
+        outkey['zscore_thresholds'] = scales
+        outkey['tail_means'] = tail_mean        
+        self.insert1(outkey)
+        
+        tail_keys=[]
+        for i in range(len(ba)):                       
+            tailkey = key.copy()
+            tailkey['brain_area'] = ba[i]
+            tailkey['layer'] =layers[i]            
+            for j, scale in enumerate(scales):
+                tail_scale_key = tailkey.copy()
+                tail_scale_key['zscore_threshold'] = float(scale)
+                tail_scale_key['unit_list']= unit_ids_sel[i,j]
+                tail_keys.append(tail_scale_key)
+                #IntraAreaUnitCorr.UnitList.insert1(tail_scale_key)
+        IntraAreaUnitCorr.UnitList.insert(tail_keys)
+        
+        
+#popout = IntraAreaUnitCorr.populate(display_progress=True)      
 
-#difference of correlation (active - quiet)
-idx,xi,yi  = common_idx(ses_keys, ses_keys2)
-Diff_corrmaps = corrmaps2[:,:,yi] - corrmaps1[:,:,xi]
-
-# remove unknown area and L1 imaging
-idx2 = np.where(~((area_list[:,0]=='unknown') | (area_list[:,1]=='L1')))[0]
-
-PAcorr.plot_corr_errorbar(Diff_corrmaps[idx2][:,idx2,:], area_list[idx2,:])
-
+   
+popout = IntraAreaUnitCorr.populate(order="random",display_progress=True,suppress_errors=True)           
+            
+            
+            
