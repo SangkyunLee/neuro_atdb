@@ -461,6 +461,7 @@ class CorrBehav2Spon(dj.Computed):
     brain_areas      : external-deeplab     # brain_area list
     layers           : external-deeplab      # layer list    
     nunit            : external-deeplab      # list of nunit
+    nsample          : int                   # number of samples
     corr_mat         : external-deeplab      # correlation coefficent beh_markers x rois   
     """
     @property
@@ -496,7 +497,8 @@ class CorrBehav2Spon(dj.Computed):
         
         idx  = ~np.isnan(X)
         idx = np.all(idx, axis=0)
-        corr = np.corrcoef(X[:,idx])
+        X = X[:,idx]
+        corr = np.corrcoef(X)
         nroi = len(ba)
         corr_ = corr[nroi:,:nroi]
         
@@ -504,13 +506,14 @@ class CorrBehav2Spon(dj.Computed):
         outkey['brain_areas'] = ", ".join(ba)
         outkey['layers'] = ", ".join(layer)
         outkey['nunit'] = nunit
+        outkey['nsample'] = X.shape[1]
         outkey['corr_mat']=corr_
         dj.conn()
         
         self.insert1(outkey)
         
     @staticmethod
-    def collect_corr(behav_down_dur, window_size,  marker_list=[],border_distance_um=50):
+    def collect_corr(behav_down_dur, window_size,  marker_list=[],border_distance_um=50, nsample_thr=50):
         """
         plot correlation coef between population activity and beh_marker
         e.g. 
@@ -530,8 +533,8 @@ class CorrBehav2Spon(dj.Computed):
             marker_list = BehavMarker.fetch('marker')
         
         
-        aid, sess, sidx, ma, ba, l, corrmat = (CorrBehav2Spon&criterion).fetch(
-                'animal_id','session','scan_idx','beh_markers','brain_areas','layers','corr_mat')   
+        aid, sess, sidx, ma, ba, l,N, corrmat = (CorrBehav2Spon&criterion).fetch(
+                'animal_id','session','scan_idx','beh_markers','brain_areas','layers','nsample','corr_mat')   
         scan_info = pd.DataFrame({'aid':aid,'ses':sess,'scan':sidx})
         scan_list = scan_info.groupby(['aid','ses']).indices
         
@@ -574,8 +577,10 @@ class CorrBehav2Spon(dj.Computed):
                     return out[0]
                 ma_idx = list(map(search_marker_list, marker_list)) 
                 R_[:,col_idx,j] = corr_[ma_idx]
-            R[:,:,i] = np.nanmean(R_, axis=2)
-            R1[:,:,scanidx] = R_
+            w =N[scanidx]
+            if sum(w)>nsample_thr:
+                R[:,:,i] = np.nansum(R_*w, axis=2)/sum(w)
+                R1[:,:,scanidx] = R_
             
             
         return R, R1, col, marker_list
@@ -606,7 +611,7 @@ class CorrBehav2Spon(dj.Computed):
 #     
 # plot correlation between behavior marker and population activity
 behav_down_dur=0.5
-window_size = 0.5
+window_size = 2
 marker_list=['pupil_radius','pos_gradient_pupil','neg_gradient_pupil','treadmill_absvel']            
 R, R1, col, marker_list = CorrBehav2Spon.collect_corr(behav_down_dur, window_size,  marker_list) 
 #keys = (dj.U('animal_id','session','scan_idx')&CorrBehav2Spon&{'behav_down_dur':0.5,'window_size':0.5,'border_distance_um':50}).fetch()
@@ -614,7 +619,10 @@ R, R1, col, marker_list = CorrBehav2Spon.collect_corr(behav_down_dur, window_siz
 #idx = np.where(np.array(x)==0)[0]
 #keys[idx]
 
-CorrBehav2Spon.plot_corr(R, col, marker_list)                
+# remove unknown area and L1 imaging
+col1 = np.array(col)
+idx2 = np.where(~((col1[:,0]=='unknown') | (col1[:,1]=='L1')))[0]
+CorrBehav2Spon.plot_corr(R[:,idx2,:], col1[idx2], marker_list)                
 #################################################
 
 
