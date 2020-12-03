@@ -577,10 +577,16 @@ class CorrBehav2Spon(dj.Computed):
                     return out[0]
                 ma_idx = list(map(search_marker_list, marker_list)) 
                 R_[:,col_idx,j] = corr_[ma_idx]
-            w =N[scanidx]
+                
+            w =N[scanidx].astype('float')
             if sum(w)>nsample_thr:
-                R[:,:,i] = np.nansum(R_*w, axis=2)/sum(w)
+                d = np.sum(~np.isnan(R_)*w,axis=2)
+                d[d<1e-5]=np.inf
+                
+                R[:,:,i] = np.nansum(R_*w, axis=2)/d
                 R1[:,:,scanidx] = R_
+            
+                
             
             
         return R, R1, col, marker_list
@@ -611,7 +617,7 @@ class CorrBehav2Spon(dj.Computed):
 #     
 # plot correlation between behavior marker and population activity
 behav_down_dur=0.5
-window_size = 2
+window_size = 1
 marker_list=['pupil_radius','pos_gradient_pupil','neg_gradient_pupil','treadmill_absvel']            
 R, R1, col, marker_list = CorrBehav2Spon.collect_corr(behav_down_dur, window_size,  marker_list) 
 #keys = (dj.U('animal_id','session','scan_idx')&CorrBehav2Spon&{'behav_down_dur':0.5,'window_size':0.5,'border_distance_um':50}).fetch()
@@ -635,7 +641,7 @@ class BehavThr(dj.Manual):
     # Threshold for Behavior State    
     state_id       :       tinyint   # behavior state id    
     state                : enum('active','intermediate','quiet')
-    mode                      :     varchar(10)
+    mode                      :     varchar(64)
     ---
     pupil_min = -1           :      float  
     pupil_max = -1           :      float
@@ -667,75 +673,71 @@ class BehavThr(dj.Manual):
         treadmill_stat = dat1['treadmill']['50%'].to_numpy()  
         quantile_list = dat1.index.to_numpy()
         
+        active_cond ={'state':'active', \
+                       'pupil_min': -1,\
+                       'pupil_max': -1,\
+                       'pos_grad_pupil_min':-1,\
+                       'pos_grad_pupil_max': -1,\
+                       'neg_grad_pupil_min': -1,\
+                       'neg_grad_pupil_max': -1,\
+                       'tread_vel_min': -1,\
+                       'tread_vel_max': -1}
+        quiet_cond ={'state':'quiet', \
+                       'pupil_min': -1,\
+                       'pupil_max': -1,\
+                       'pos_grad_pupil_min':-1,\
+                       'pos_grad_pupil_max': -1,\
+                       'neg_grad_pupil_min': -1,\
+                       'neg_grad_pupil_max': -1,\
+                       'tread_vel_min': -1,\
+                       'tread_vel_max': -1}
+        
         if mode == 'pupil':
             ipup = np.argmin(abs(quantile_list - thresholds['pupil']))
             ipg = np.argmin(abs(quantile_list - thresholds['pos_grad_pupil']))
             ing = np.argmin(abs(quantile_list - thresholds['neg_grad_pupil']))
-            active_cond ={'state':'active', \
-                       'pupil_min': pup_stat[ipup],\
-                       'pupil_max': -1,\
-                       'pos_grad_pupil_min':pg_pup_stat[ipg],\
-                       'pos_grad_pupil_max': -1,\
-                       'neg_grad_pupil_min': ng_pup_stat[ing],\
-                       'neg_grad_pupil_max': -1,\
-                       'tread_vel_min': -1,\
-                       'tread_vel_max': -1}
             
-            quiet_cond ={'state':'quiet', \
-                       'pupil_min': -1,\
-                       'pupil_max': pup_stat[ipup],\
-                       'pos_grad_pupil_min':-1,\
-                       'pos_grad_pupil_max': pg_pup_stat[ipg],\
-                       'neg_grad_pupil_min': -1,\
-                       'neg_grad_pupil_max': ng_pup_stat[ing],\
-                       'tread_vel_min': -1,\
-                       'tread_vel_max': -1}
+            active_cond['pupil_min'] = pup_stat[ipup]
+            active_cond['pos_grad_pupil_min'] = pg_pup_stat[ipg]
+            active_cond['neg_grad_pupil_min'] = ng_pup_stat[ing]
+            
+            quiet_cond['pupil_max'] = pup_stat[ipup]
+            quiet_cond['pos_grad_pupil_max'] = pg_pup_stat[ipg]
+            quiet_cond['neg_grad_pupil_max'] = ng_pup_stat[ing]          
+            
+            
+        elif mode == 'pos_grad_pupil':            
+            ipg = np.argmin(abs(quantile_list - thresholds['pos_grad_pupil']))            
+            active_cond['pos_grad_pupil_min'] = pg_pup_stat[ipg]
+            quiet_cond['pos_grad_pupil_max'] = pg_pup_stat[ipg]
+            
+        elif mode == 'neg_grad_pupil':            
+            ing = np.argmin(abs(quantile_list - thresholds['neg_grad_pupil']))            
+            active_cond['neg_grad_pupil_min'] = pg_pup_stat[ing]
+            quiet_cond['neg_grad_pupil_max'] = pg_pup_stat[ing]
             
         elif mode == 'treadmill':
             itread = np.argmin(abs(quantile_list - thresholds['treadmill']))
-            active_cond ={'state':'active', \
-                       'pupil_min': -1,\
-                       'pupil_max': -1,\
-                       'pos_grad_pupil_min':-1,\
-                       'pos_grad_pupil_max': -1,\
-                       'neg_grad_pupil_min': -1,\
-                       'neg_grad_pupil_max': -1,\
-                       'tread_vel_min': treadmill_stat[itread],\
-                       'tread_vel_max': -1}
-            quiet_cond ={'state':'quiet', \
-                       'pupil_min': -1,\
-                       'pupil_max': -1,\
-                       'pos_grad_pupil_min':-1,\
-                       'pos_grad_pupil_max': -1,\
-                       'neg_grad_pupil_min': -1,\
-                       'neg_grad_pupil_max': -1,\
-                       'tread_vel_min': -1,\
-                       'tread_vel_max': treadmill_stat[itread]}
+            active_cond['tread_vel_min'] = treadmill_stat[itread]
+            quiet_cond['tread_vel_max'] = treadmill_stat[itread]
             
-        elif mode == 'both':
+        elif mode == 'pupil_treadmill':
             ipup = np.argmin(abs(quantile_list - thresholds['pupil']))
             ipg = np.argmin(abs(quantile_list - thresholds['pos_grad_pupil']))
             ing = np.argmin(abs(quantile_list - thresholds['neg_grad_pupil']))
             itread = np.argmin(abs(quantile_list - thresholds['treadmill']))
-            active_cond ={'state':'active', \
-                       'pupil_min': pup_stat[ipup],\
-                       'pupil_max': -1,\
-                       'pos_grad_pupil_min':pg_pup_stat[ipg],\
-                       'pos_grad_pupil_max': -1,\
-                       'neg_grad_pupil_min': ng_pup_stat[ing],\
-                       'neg_grad_pupil_max': -1,\
-                       'tread_vel_min': treadmill_stat[itread],\
-                       'tread_vel_max': -1}
             
-            quiet_cond ={'state':'quiet', \
-                       'pupil_min': -1,\
-                       'pupil_max': pup_stat[ipup],\
-                       'pos_grad_pupil_min':-1,\
-                       'pos_grad_pupil_max': pg_pup_stat[ipg],\
-                       'neg_grad_pupil_min': -1,\
-                       'neg_grad_pupil_max': ng_pup_stat[ing],\
-                       'tread_vel_min': -1,\
-                       'tread_vel_max': treadmill_stat[itread]}
+            active_cond['pupil_min'] = pup_stat[ipup]
+            active_cond['pos_grad_pupil_min'] = pg_pup_stat[ipg]
+            active_cond['neg_grad_pupil_min'] = ng_pup_stat[ing]
+            active_cond['tread_vel_min'] = treadmill_stat[itread]
+            
+            quiet_cond['pupil_max'] = pup_stat[ipup]
+            quiet_cond['pos_grad_pupil_max'] = pg_pup_stat[ipg]
+            quiet_cond['neg_grad_pupil_max'] = ng_pup_stat[ing]
+            quiet_cond['tread_vel_max'] = treadmill_stat[itread]
+            
+            
         else:
             raise NotImplementedError('mode {}  not implemented'.format(mode))
         
@@ -769,14 +771,24 @@ class BehavThr(dj.Manual):
 #BehavThr.insert1(active)
 #BehavThr.insert1(quiet)
 #
-##both include pupil and treadmill
-#active, quiet = BehavThr.set_thresholds(thrs, 'both')
+
+
+##positive gradient of pupil
+#thrs ={'pos_grad_pupil':0.9 } 
+#active, quiet = BehavThr.set_thresholds(thrs, 'pos_grad_pupil')
 #active['state_id']=2
 #quiet['state_id']=2
 #BehavThr.insert1(active)
 #BehavThr.insert1(quiet)
-
-
+#
+#
+##positive gradient of pupil
+#thrs ={'neg_grad_pupil':0.9 } 
+#active, quiet = BehavThr.set_thresholds(thrs, 'neg_grad_pupil')
+#active['state_id']=3
+#quiet['state_id']=3
+#BehavThr.insert1(active)
+#BehavThr.insert1(quiet)
 
 @schema
 class Activity4BehavState(dj.Computed):
@@ -851,7 +863,10 @@ class Activity4BehavState(dj.Computed):
         ((tread_vel[0]<thrs['tread_vel_max'])  \
         if thrs['tread_vel_max']>0 else np.full_like(tread_vel[0],1).astype(bool))
         
-        behav_idx = (pup_idx | pg_pup_idx | ng_pup_idx) & tread_idx
+        if thrs['mode']=='pupil': # this is only retro-compatibility
+            behav_idx = (pup_idx | pg_pup_idx | ng_pup_idx)
+        else:
+            behav_idx = pup_idx & pg_pup_idx & ng_pup_idx & tread_idx
  
     
         min_ = min(len(t[0]), Pact.shape[1])
@@ -970,9 +985,9 @@ class PAcorr(dj.Computed):
         self.insert1(outkey)
     
     @staticmethod
-    def collect_corr(behavcond={}, preproc={'border_distance_um':30, 'behav_down_dur':0.5, 'window_size':0.5}, nsample_thr =100):   
+    def collect_corr(behavcond={}, preproc={'border_distance_um':50, 'behav_down_dur':0.5, 'window_size':1}, nsample_thr =10):   
         """
-        def collect_corr(self, behavcond={}, preproc={'border_distance_um':30, 'behav_down_dur':0.5, 'window_size':0.5}, nsample_thr =500)
+        def collect_corr(self, behavcond={}, preproc={'border_distance_um':50, 'behav_down_dur':0.5, 'window_size':0.5}, nsample_thr =500)
         
         collect correlation matrix across scans with behavcond
         if multiple behavor conditions are satfisfied with query,
@@ -989,6 +1004,7 @@ class PAcorr(dj.Computed):
         las=[]
         scan_list =[]
         corr_list=[]
+        nsample_list=[]
         
 
             
@@ -999,6 +1015,7 @@ class PAcorr(dj.Computed):
         for sci in scankeys.fetch('KEY'):
             ba_, la_, corr, nsample = (datkey&sci).fetch('brain_areas','layers',
                                       'corr','nsample')
+            print(nsample)
             ncond = len(datkey&sci)
             if np.all(nsample>nsample_thr):
                 print(sci)
@@ -1015,8 +1032,9 @@ class PAcorr(dj.Computed):
                 las.append(la_[0])
                 corr_list.append(aggcorr)
                 scan_list.append(sci)
+                nsample_list.append(total_sample)
                 
-        return bas, las, corr_list, scan_list
+        return bas, las, corr_list, scan_list, nsample_list
     
     
     @staticmethod
@@ -1031,7 +1049,7 @@ class PAcorr(dj.Computed):
         return area_list
     
     @staticmethod
-    def sort_corr_byarea(corrs, scans, brain_areas, layers, groupby=None): 
+    def sort_corr_byarea(corrs, scans, brain_areas, layers, groupby=None, nsamples=[]): 
         """
         corrs: list of correlation matrix
         scans: list of tuple of animal_id, session, scan_idx
@@ -1072,7 +1090,12 @@ class PAcorr(dj.Computed):
             for i, key in enumerate(ses_keys):
                 indices = a.indices[key]
                 print(indices)
-                mcorr  = np.nanmean(corrmaps[:,:,indices],axis=2)
+                n = np.array(nsamples)[indices].astype('float')
+                c = corrmaps[:,:,indices]
+                d = np.sum(~np.isnan(c)*n,axis=2)
+                #d[d<1e-5]=np.inf
+                mcorr = np.nansum(c*n,axis=2)/d                
+                #mcorr  = np.nanmean(corrmaps[:,:,indices],axis=2)
                 corrmaps_session[:,:,i]= mcorr
                 
             return corrmaps_session, area_list, ses_keys
@@ -1080,9 +1103,9 @@ class PAcorr(dj.Computed):
             raise NotImplementedError('groupby {}  not implemented'.format(groupby))
             
     @staticmethod
-    def plot_corr_errorbar(corrmaps, area_list, hfigs=[]):
+    def plot_corr_errorbar(corrmaps, area_list, nthr=0, hfigs=[]):
         """
-        plot_corr_errorbar(corrmaps, area_list, hfigs=[])
+        plot_corr_errorbar(corrmaps, area_list, nthr=0, hfigs=[])
         corrmaps: roi x roi x samples
         area_list: roi x 2
         plot correlation with errorbar across samples
@@ -1095,22 +1118,26 @@ class PAcorr(dj.Computed):
         std_mcorr = np.nanstd(corrmaps, axis=2)
         vcorrmaps = np.sum(~np.isnan(corrmaps),axis=2)
         se_mcorr = std_mcorr/np.sqrt(vcorrmaps)
+        if nthr>0:
+            mean_mcorr[vcorrmaps[:]<nthr]=np.nan
+            se_mcorr[vcorrmaps<nthr]=np.nan
         
-        
+        plt.figure(figsize=(15,5*corrmaps.shape[0]))
         for idx in range(corrmaps.shape[0]):
-      
-            plt.figure(figsize=(15,5))
+            plt.subplot(corrmaps.shape[0],1,idx+1)
+            
             yid = np.argsort(mean_mcorr[idx,:])[::-1]  
             n = list(range(len(yid)))
             plt.errorbar(n, mean_mcorr[idx,yid], se_mcorr[idx,yid])
             plt.plot(n, np.full_like(n,fill_value=0),'--', linewidth=1)
             plt.xticks(n,np.array(legend_str)[yid])
-            plt.title(legend_str[idx])
+            title_str = area_list[idx][0] + " " + area_list[idx][1]
+            plt.title(title_str)
 
-        return hfigs
+        
     
     @staticmethod
-    def plot_corr_errorbar_multi(corrmaps, area_list, sortby=None):
+    def plot_corr_errorbar_multi(corrmaps, area_list, nthr=0, sortby=None):
         """
         plot_errorbar for list of correlation maps from different conditions, e.g., active vs quiet
         plot_corr_errorbar_multi(corrmaps, area_list, hfigs=[])
@@ -1124,8 +1151,13 @@ class PAcorr(dj.Computed):
         for i in range(len(corrmaps)):        
             std_mcorr = np.nanstd(corrmaps[i], axis=2)
             vcorrmaps = np.sum(~np.isnan(corrmaps[i]),axis=2)
-            se_mcorr.append(std_mcorr/np.sqrt(vcorrmaps))
-            mean_mcorr.append(np.nanmean(corrmaps[i], axis=2))
+            se = std_mcorr/np.sqrt(vcorrmaps)
+            m = np.nanmean(corrmaps[i], axis=2)
+            if nthr>0:
+                m[vcorrmaps<nthr]=np.nan
+                se[vcorrmaps<nthr]=np.nan
+            se_mcorr.append(se)
+            mean_mcorr.append(m)
         
         for idx in range(len(area_list)):
             hfig = plt.figure(figsize=(15,5))
@@ -1172,18 +1204,24 @@ def common_idx(x, y):
 """
 plot PA correlation with state
 """        
-## for both quiet and active
-#bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill'})
-#
-#bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'quiet'})    
-#corrmaps1, area_list, ses_keys =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan')     
-#
-#bas, las, corrs, scans =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'active'})    
-#corrmaps2, area_list2, ses_keys2 =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan')     
-#     
-##hfigs = PAcorr.plot_corr_errorbar(corrmaps, area_list)
-##hfigs = PAcorr.plot_corr_errorbar(corrmaps2, area_list, hfigs)
-#
+# for both quiet and active
+preproc={'border_distance_um':50, 'behav_down_dur':0.5, 'window_size':0.5}
+bas, las, corrs, scans, nsamples =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill'}, preproc=preproc)
+corrmaps0, area_list, ses_keys =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan', nsamples=nsamples)  
+idx2 = np.where(~((area_list[:,0]=='unknown') | (area_list[:,1]=='L1')))[0]
+PAcorr.plot_corr_errorbar(corrmaps0[idx2][:,idx2,:], area_list[idx2,:], nthr=5)
+
+
+preproc={'border_distance_um':50, 'behav_down_dur':0.5, 'window_size':1}
+bas, las, corrs, scans, nsamples1 =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'quiet'}, preproc=preproc)    
+corrmaps1, area_list1, ses_keys1 =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan', nsamples=nsamples1)     
+
+bas, las, corrs, scans, nsamples2 =PAcorr.collect_corr(behavcond={'state_id':1, 'mode':'treadmill','state':'active'}, preproc=preproc)    
+corrmaps2, area_list2, ses_keys2 =  PAcorr.sort_corr_byarea(corrs,scans,bas,las,groupby='scan', nsamples=nsamples2)     
+     
+
+
+
 #
 #        
 #
@@ -1194,12 +1232,12 @@ plot PA correlation with state
 #
 #
 ##difference of correlation (active - quiet)
-#idx,xi,yi  = common_idx(ses_keys, ses_keys2)
-#Diff_corrmaps = corrmaps2[:,:,yi] - corrmaps1[:,:,xi]
-#
+idx,xi,yi  = common_idx(ses_keys1, ses_keys2)
+Diff_corrmaps = corrmaps2[:,:,yi] - corrmaps1[:,:,xi]
+
 ## remove unknown area and L1 imaging
-#idx2 = np.where(~((area_list[:,0]=='unknown') | (area_list[:,1]=='L1')))[0]
-#PAcorr.plot_corr_errorbar(Diff_corrmaps[idx2][:,idx2,:], area_list[idx2,:])
+idx2 = np.where(~((area_list[:,0]=='unknown') | (area_list[:,1]=='L1')))[0]
+PAcorr.plot_corr_errorbar(Diff_corrmaps[idx2][:,idx2,:], area_list[idx2,:], nthr=5)
 
 
 
