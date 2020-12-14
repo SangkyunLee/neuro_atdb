@@ -21,6 +21,27 @@ anatomy = dj.create_virtual_module('anatomy', 'pipeline_anatomy')
 
 
 schema = dj.schema('sang_spon')
+
+@schema
+class TaliahSponScan(dj.Manual):
+    definition = """ # Taliah's scans with spontaneous activity recording,
+    #spontaneous activity is marked with stimulus.SingleDot and
+    # dot luminance level is set as the background activity
+    animal_id             : smallint 
+    session               : smallint
+    scan_idx              : smallint
+    """
+    @staticmethod
+    def get_spontaneous_start_frame(key):
+        bg, dot_color = (stimulus.SingleDot&( stimulus.Condition&(stimulus.Trial&key))).fetch('bg_level','dot_level')
+        assert (len(bg)==1 and bg[0]==dot_color[0]), "Not Validate Key"
+
+        flip_times = ((stimulus.Trial&key)&(stimulus.Condition&'stimulus_type="stimulus.SingleDot"')).fetch('flip_times')
+        spon_start_time = flip_times[0].flatten()[0]
+        return spon_start_time
+
+
+
 @schema
 class Sponscan(dj.Computed):
     definition = """ # scanlist with spontaneous recording
@@ -31,7 +52,9 @@ class Sponscan(dj.Computed):
     spon_frame_dur                    : int unsigned      #frame duration
     caclulation_time=CURRENT_TIMESTAMP    : timestamp     # automatic
     """
-    
+    @property
+    def key_source(self):
+        return meso.ScanInfo.proj()
     
     def make(self, key):
         
@@ -40,7 +63,10 @@ class Sponscan(dj.Computed):
         flip_times = (stimulus.Trial & key).fetch('flip_times')
         if len(stim_key)>0 and len(flip_times)>0:
             
-            last_flip_times = np.nanmax(flip_times[-1].flatten())
+            if len(TaliahSponScan&key)==1:
+                last_flip_times = TaliahSponScan.get_spontaneous_start_frame(key)
+            else:
+                last_flip_times = np.nanmax(flip_times[-1].flatten())
             
             frame_times = stim_key.fetch1('frame_times').squeeze() 
             slice_num = len(np.unique((meso.ScanInfo.Field & key).fetch('z')))
@@ -66,7 +92,7 @@ class Sponscan(dj.Computed):
     
                 
                 self.insert1(out_)
-                
+#Sponscan.populate(order="random",display_progress=True,suppress_errors=True)                
 
 @schema
 class SponScanSel(dj.Computed):
@@ -82,6 +108,11 @@ class SponScanSel(dj.Computed):
     field_depth                       : blob              #field depth list
     caclulation_time=CURRENT_TIMESTAMP    : timestamp     # automatic
     """
+    
+    @property
+    def key_source(self):
+        return Sponscan.proj()
+    
     def make(self, key):
         import numpy as np
         key1 = key.copy()
@@ -111,6 +142,8 @@ class SponScanSel(dj.Computed):
             key1['field_depth'] = udepth
             key1['spon_frame_dur'] = spon_frame_dur
             self.insert1(key1)
+            
+#SponScanSel.populate(order="random",display_progress=True,suppress_errors=True) 
 
 @schema
 class SpontaneousActivity(dj.Computed):
@@ -960,7 +993,7 @@ class Activity4BehavState(dj.Computed):
             Activity4BehavState.Behav.insert1(behkey)
             
             
-popout = Activity4BehavState.populate(order="random",display_progress=True,suppress_errors=True)        
+#popout = Activity4BehavState.populate(order="random",display_progress=True,suppress_errors=True)        
 #popout = Activity4BehavState.populate(display_progress=True)         
         
 @schema
@@ -1333,7 +1366,7 @@ class IntraAreaUnitCorr(dj.Computed):
 #popout = IntraAreaUnitCorr.populate(display_progress=True)      
 
    
-popout = IntraAreaUnitCorr.populate(order="random",display_progress=True,suppress_errors=True)           
+#popout = IntraAreaUnitCorr.populate(order="random",display_progress=True,suppress_errors=True)           
             
             
             
